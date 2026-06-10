@@ -71,3 +71,48 @@ are walked within the trusted set only.
 a cycle would require a hash collision, and `DeltaSet` verifies every id on insert. Implementations
 still guard the recursion (memo with an in-progress default of "not negated") so that adversarial
 input degrades safely instead of overflowing the stack.
+
+## E6 — `group` filing rules
+
+`group(key, D) @ root` (SPEC-2 §4.4) partitions D into properties. v0 decisions:
+
+- Only pointers whose target is an `EntityRef` with `id == root` are *filing pointers*.
+- `byTargetContext`: the delta files under each filing pointer's `context`; a filing pointer
+  **without** a context files nothing (a property needs a name). A delta with no filing pointer is
+  excluded from the HView.
+- `byRole`: the delta files under each filing pointer's `role` (roles are always present).
+- `const(s)`: **every** delta in D files under `s` — no filing pointer required (this is the
+  "bag it all" projection).
+- A delta may file under several properties (one per distinct filing key); within one property a
+  delta appears **once** (entries are unique by delta id).
+- The empty result is `HView{id: root, props: {}}` — present id, empty props, never null
+  (SPEC-3 §7).
+
+## E7 — HyperView canonical form (v0, pre-expansion)
+
+```
+HView   = CBOR map { "id": tstr(root), "props": map { propertyName: [HVEntry...] } }
+HVEntry = CBOR map { "id": tstr(deltaId), "claims": <canonical claims map, SPEC-1 §4.1>,
+                     "sig"?: tstr, "negated"?: true }
+```
+
+Map keys sort canonically (D4). Entries within a property are **sorted by delta id**. The
+`negated` flag appears only when true, and only when the grouped operand was a `mask(annotate)`
+result — group threads annotate tags into entries (this is how SPEC-5 §4 audit views see
+retractions). `expand` (M1.3) will extend HVEntry with expanded targets; the encoding above is the
+terminal (unexpanded) form.
+
+## E8 — `prune` operates at property granularity (v0)
+
+`prune(keep: StrMatch | all)` retains the HView properties whose **name** matches (`all` = keep
+everything, the identity). SPEC-2 §4.6's "drop pointers" reading — trimming pointer lists inside
+entries — is **deferred**: it tensions with SPEC-3 §4's provenance-completeness ("every HVEntry is
+a full delta") and no current consumer needs it. Filed as an open question; revisiting costs a
+vector regen.
+
+## E9 — Sorts are checked at evaluation time (v0)
+
+Terms are dynamically sorted in v0: applying `select`/`union`/`mask` to an HView, `group` to an
+HView, or `prune` to a DSet is an evaluation error; `group` without an ambient root (supplied by
+the evaluation call, later by `fix`) is an evaluation error. Static term sort-checking can arrive
+with the schema registry (M1.3+) without changing any vector.

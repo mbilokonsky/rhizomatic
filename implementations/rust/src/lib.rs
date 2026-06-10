@@ -5,6 +5,7 @@ pub mod cbor;
 pub mod delta;
 pub mod eval;
 pub mod hash;
+pub mod hview;
 pub mod json_profile;
 pub mod pred;
 pub mod set;
@@ -13,7 +14,10 @@ pub mod term_json;
 pub mod types;
 
 pub use delta::{canonical_bytes, canonical_hex, compute_id};
-pub use eval::{eval_term, result_canonical_hex, EvalResult, MaskPolicy, Term};
+pub use eval::{
+    eval_term, result_canonical_hex, EvalResult, GroupKey, MaskPolicy, PruneKeep, Term,
+};
+pub use hview::{hview_canonical_hex, HVEntry, HView};
 pub use pred::{compare_primitives, eval_pred, Pred};
 pub use set::{federate, fork, make_delta, make_negation_claims, merge, DeltaSet};
 pub use sign::{sign_claims, verify_delta, Verification};

@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { evalTerm, resultCanonicalHex, type Term } from "../src/eval.js";
+import { evalTerm, resultCanonicalHex, type EvalResult, type Term } from "../src/eval.js";
 import { parseClaims } from "../src/json-profile.js";
 import { evalPred, type Pred } from "../src/pred.js";
 import { DeltaSet, fork, makeDelta, merge } from "../src/set.js";
@@ -23,6 +23,11 @@ const evalBasic = JSON.parse(
   }>;
 };
 
+function asDSet(r: EvalResult) {
+  if (r.sort !== "dset") throw new Error("expected a DSet result");
+  return r;
+}
+
 const fixtureSet = DeltaSet.from(
   evalBasic.fixture.deltas.map((d) => makeDelta(parseClaims(d.claims))),
 );
@@ -36,7 +41,7 @@ describe("l1-eval vectors (select/union/mask)", () => {
 
   for (const c of evalBasic.cases) {
     it(c.name, () => {
-      const result = evalTerm(parseTerm(c.term), fixtureSet);
+      const result = asDSet(evalTerm(parseTerm(c.term), fixtureSet));
       expect(result.set.ids()).toEqual(c.expected.ids);
       if (c.expected.negated !== undefined) {
         expect([...result.negated].sort()).toEqual(c.expected.negated);
@@ -91,8 +96,8 @@ describe("evaluator laws (SPEC-2)", () => {
   it("select composes by conjunction: select(p, select(q, D)) = select(and(p,q), D)", () => {
     fc.assert(
       fc.property(setArb, predArb, predArb, (d, p, q) => {
-        const nested = evalTerm(selectTerm(p, selectTerm(q)), d);
-        const conj = evalTerm(selectTerm({ kind: "and", left: p, right: q }), d);
+        const nested = asDSet(evalTerm(selectTerm(p, selectTerm(q)), d));
+        const conj = asDSet(evalTerm(selectTerm({ kind: "and", left: p, right: q }), d));
         return nested.set.digest() === conj.set.digest();
       }),
     );
@@ -101,8 +106,8 @@ describe("evaluator laws (SPEC-2)", () => {
   it("select is monotone: select(p, A) ⊆ select(p, A ∪ B)", () => {
     fc.assert(
       fc.property(setArb, setArb, predArb, (a, b, p) => {
-        const small = evalTerm(selectTerm(p), a);
-        const big = evalTerm(selectTerm(p), merge(a, b));
+        const small = asDSet(evalTerm(selectTerm(p), a));
+        const big = asDSet(evalTerm(selectTerm(p), merge(a, b)));
         return [...small.set].every((d) => big.set.has(d.id));
       }),
     );
@@ -111,9 +116,8 @@ describe("evaluator laws (SPEC-2)", () => {
   it("mask(drop) yields a subset of its operand", () => {
     fc.assert(
       fc.property(setArb, (d) => {
-        const masked = evalTerm(
-          { kind: "mask", policy: { kind: "drop" }, of: { kind: "input" } },
-          d,
+        const masked = asDSet(
+          evalTerm({ kind: "mask", policy: { kind: "drop" }, of: { kind: "input" } }, d),
         );
         return [...masked.set].every((x) => d.has(x.id));
       }),
@@ -123,8 +127,10 @@ describe("evaluator laws (SPEC-2)", () => {
   it("union over selects equals select over disjunction", () => {
     fc.assert(
       fc.property(setArb, predArb, predArb, (d, p, q) => {
-        const viaUnion = evalTerm({ kind: "union", left: selectTerm(p), right: selectTerm(q) }, d);
-        const viaOr = evalTerm(selectTerm({ kind: "or", left: p, right: q }), d);
+        const viaUnion = asDSet(
+          evalTerm({ kind: "union", left: selectTerm(p), right: selectTerm(q) }, d),
+        );
+        const viaOr = asDSet(evalTerm(selectTerm({ kind: "or", left: p, right: q }), d));
         return viaUnion.set.digest() === viaOr.set.digest();
       }),
     );
@@ -133,7 +139,7 @@ describe("evaluator laws (SPEC-2)", () => {
   it("select agrees with direct fork over evalPred", () => {
     fc.assert(
       fc.property(setArb, predArb, (d, p) => {
-        const viaTerm = evalTerm(selectTerm(p), d);
+        const viaTerm = asDSet(evalTerm(selectTerm(p), d));
         const viaFork = fork(d, (x: Delta) => evalPred(p, x));
         return viaTerm.set.digest() === viaFork.digest();
       }),

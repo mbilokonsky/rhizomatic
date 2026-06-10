@@ -1,7 +1,7 @@
 // Parse the JSON term profile (ERRATA-2 E1) into Term/Pred. Strings are NFC-normalized at parse
 // time so term-side comparisons are NFC-vs-NFC (data strings are NFC by validation, D11).
 
-import type { Term, MaskPolicy } from "./eval.js";
+import type { GroupKey, MaskPolicy, Term } from "./eval.js";
 import type { Cmp, PPred, Pred, StrMatch, ValMatch } from "./pred.js";
 import type { Primitive } from "./types.js";
 
@@ -158,6 +158,14 @@ function parseMaskPolicy(raw: unknown): MaskPolicy {
   throw new Error("mask policy must be drop | annotate | {trust: Pred}");
 }
 
+function parseGroupKey(raw: unknown): GroupKey {
+  if (raw === "byTargetContext") return { kind: "byTargetContext" };
+  if (raw === "byRole") return { kind: "byRole" };
+  const o = asObject(raw, "group.key");
+  if (typeof o["const"] === "string") return { kind: "const", prop: nfc(o["const"]) };
+  throw new Error("group key must be byTargetContext | byRole | {const: string}");
+}
+
 export function parseTerm(raw: unknown): Term {
   if (raw === "input") return { kind: "input" };
   const o = asObject(raw, "term");
@@ -168,6 +176,12 @@ export function parseTerm(raw: unknown): Term {
       return { kind: "union", left: parseTerm(o["left"]), right: parseTerm(o["right"]) };
     case "mask":
       return { kind: "mask", policy: parseMaskPolicy(o["policy"]), of: parseTerm(o["in"]) };
+    case "group":
+      return { kind: "group", key: parseGroupKey(o["key"]), of: parseTerm(o["in"]) };
+    case "prune": {
+      const keep = o["keep"] === "all" ? "all" : parseStrMatch(o["keep"], "prune.keep");
+      return { kind: "prune", keep, of: parseTerm(o["in"]) };
+    }
     default:
       throw new Error(`unknown term op ${String(o["op"])}`);
   }

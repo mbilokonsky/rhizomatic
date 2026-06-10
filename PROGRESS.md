@@ -35,8 +35,12 @@ be correct and boring. Slices:
   guarded negation recursion (E5), NFC-at-the-boundary validation (ERRATA-1 D11). 15 vectors over
   an 8-delta fixture incl. negation chains + mixed-type ordering; 5 evaluator-law proptests
   (select conjunction-composition, monotonicity, mask⊆operand, union≡or, select≡fork).
-- **M1.2 — group/prune + HyperView canonical form.** GroupKey byTargetContext|byRole|const;
-  HView structure + its canonical CBOR serialization (content-addressable, SPEC-3 §4).
+- **M1.2 — group/prune + HyperView canonical form.** ✅ **complete.** Two-sort evaluator (DSet |
+  HView, checked at eval time, E9); group filing rules (E6: filing pointers, contextless exclusion,
+  multi-property filing, const-bags-all); HView canonical CBOR (E7: sorted props, id-sorted entries,
+  annotate tags threaded into entries for audit views); prune at property granularity (E8 — the
+  pointer-level reading is deferred, logged as an open question). 11 vectors incl. canonical schema
+  idiom, prune-all identity, empty-root, contextless probes.
 - **M1.3 — expand/fix + schema registry.** SchemaRef (pinned hash | evolvable entity), the DAG
   constraint + cycle rejection, expansion against the same DSet, data-cycle termination vectors
   (Keanu ↔ BRZRKR).

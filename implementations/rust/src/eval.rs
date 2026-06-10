@@ -1,10 +1,11 @@
-//! Term evaluation for the DSet fragment: select, union, mask (SPEC-2 §4.1-4.3).
-//! Mirrors ../ts/src/eval.ts. eval is pure, order-blind, deterministic (SPEC-2 §5).
+//! Term evaluation: select/union/mask over DSet (SPEC-2 §4.1-4.3), group into HView (§4.4),
+//! prune over HView (§4.6). Mirrors ../ts/src/eval.ts. Sorts are checked at evaluation time (E9).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::cbor::{encode, CborValue};
-use crate::pred::{eval_pred, Pred};
+use crate::hview::{hview_canonical_hex, HVEntry, HView};
+use crate::pred::{eval_pred, str_match, Pred, StrMatch};
 use crate::set::{fork, merge, DeltaSet};
 use crate::types::{Delta, Target};
 
@@ -16,19 +17,45 @@ pub enum MaskPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum GroupKey {
+    ByTargetContext,
+    ByRole,
+    Const(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PruneKeep {
+    All,
+    Match(StrMatch),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Term {
     Input,
     Select { pred: Pred, of: Box<Term> },
     Union { left: Box<Term>, right: Box<Term> },
     Mask { policy: MaskPolicy, of: Box<Term> },
+    Group { key: GroupKey, of: Box<Term> },
+    Prune { keep: PruneKeep, of: Box<Term> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct EvalResult {
-    pub set: DeltaSet,
-    /// Negation tags; populated only by a top-level mask(annotate) (ERRATA-2 E2).
-    pub negated: BTreeSet<String>,
-    pub annotated: bool,
+pub enum EvalResult {
+    DSet {
+        set: DeltaSet,
+        /// Negation tags from mask(annotate); consumed by group (E7) or surfaced top-level (E2).
+        negated: BTreeSet<String>,
+        annotated: bool,
+    },
+    HView(HView),
+}
+
+fn dset_result(set: DeltaSet) -> EvalResult {
+    EvalResult::DSet {
+        set,
+        negated: BTreeSet::new(),
+        annotated: false,
+    }
 }
 
 fn is_negated(
@@ -75,83 +102,148 @@ fn compute_negated(d: &DeltaSet, trusted: Option<&Pred>) -> BTreeSet<String> {
         .collect()
 }
 
-pub fn eval_term(term: &Term, input: &DeltaSet) -> EvalResult {
-    match term {
-        Term::Input => EvalResult {
-            set: input.clone(),
-            negated: BTreeSet::new(),
-            annotated: false,
-        },
-        Term::Select { pred, of } => {
-            let of = eval_term(of, input);
-            EvalResult {
-                set: fork(&of.set, |d: &Delta| eval_pred(pred, d)),
-                negated: BTreeSet::new(),
-                annotated: false,
-            }
+/// group(key, D) @ root — filing rules per ERRATA-2 E6; annotate tags thread into entries (E7).
+fn eval_group(key: &GroupKey, set: &DeltaSet, negated: &BTreeSet<String>, root: &str) -> HView {
+    let mut buckets: BTreeMap<String, BTreeMap<String, HVEntry>> = BTreeMap::new();
+    let mut file = |prop: &str, d: &Delta| {
+        buckets
+            .entry(prop.to_string())
+            .or_default()
+            .entry(d.id.clone())
+            .or_insert_with(|| HVEntry {
+                delta: d.clone(),
+                negated: negated.contains(&d.id),
+            });
+    };
+    for d in set.iter() {
+        if let GroupKey::Const(prop) = key {
+            file(prop, d);
+            continue;
         }
-        Term::Union { left, right } => {
-            let l = eval_term(left, input);
-            let r = eval_term(right, input);
-            EvalResult {
-                set: merge(&l.set, &r.set),
-                negated: BTreeSet::new(),
-                annotated: false,
+        for ptr in &d.claims.pointers {
+            let Target::Entity(er) = &ptr.target else {
+                continue;
+            };
+            if er.id != root {
+                continue;
             }
-        }
-        Term::Mask { policy, of } => {
-            let of = eval_term(of, input);
-            match policy {
-                MaskPolicy::Drop => {
-                    let negated = compute_negated(&of.set, None);
-                    EvalResult {
-                        set: fork(&of.set, |d: &Delta| !negated.contains(&d.id)),
-                        negated: BTreeSet::new(),
-                        annotated: false,
+            match key {
+                GroupKey::ByTargetContext => {
+                    if let Some(ctx) = &er.context {
+                        file(ctx, d);
                     }
                 }
+                GroupKey::ByRole => file(&ptr.role, d),
+                GroupKey::Const(_) => unreachable!("handled above"),
+            }
+        }
+    }
+    // BTreeMap iteration is id-sorted already (entries keyed by id).
+    let props = buckets
+        .into_iter()
+        .map(|(prop, bucket)| (prop, bucket.into_values().collect()))
+        .collect();
+    HView {
+        id: root.to_string(),
+        props,
+    }
+}
+
+pub fn eval_term(term: &Term, input: &DeltaSet, root: Option<&str>) -> Result<EvalResult, String> {
+    fn expect_dset(r: EvalResult, op: &str) -> Result<(DeltaSet, BTreeSet<String>, bool), String> {
+        match r {
+            EvalResult::DSet {
+                set,
+                negated,
+                annotated,
+            } => Ok((set, negated, annotated)),
+            EvalResult::HView(_) => Err(format!("{op} requires a DSet operand (E9)")),
+        }
+    }
+    match term {
+        Term::Input => Ok(dset_result(input.clone())),
+        Term::Select { pred, of } => {
+            let (set, _, _) = expect_dset(eval_term(of, input, root)?, "select")?;
+            Ok(dset_result(fork(&set, |d: &Delta| eval_pred(pred, d))))
+        }
+        Term::Union { left, right } => {
+            let (l, _, _) = expect_dset(eval_term(left, input, root)?, "union")?;
+            let (r, _, _) = expect_dset(eval_term(right, input, root)?, "union")?;
+            Ok(dset_result(merge(&l, &r)))
+        }
+        Term::Mask { policy, of } => {
+            let (set, _, _) = expect_dset(eval_term(of, input, root)?, "mask")?;
+            Ok(match policy {
+                MaskPolicy::Drop => {
+                    let negated = compute_negated(&set, None);
+                    dset_result(fork(&set, |d: &Delta| !negated.contains(&d.id)))
+                }
                 MaskPolicy::Annotate => {
-                    let negated = compute_negated(&of.set, None);
-                    EvalResult {
-                        set: of.set,
+                    let negated = compute_negated(&set, None);
+                    EvalResult::DSet {
+                        set,
                         negated,
                         annotated: true,
                     }
                 }
                 MaskPolicy::Trust(pred) => {
-                    let negated = compute_negated(&of.set, Some(pred));
-                    EvalResult {
-                        set: fork(&of.set, |d: &Delta| !negated.contains(&d.id)),
-                        negated: BTreeSet::new(),
-                        annotated: false,
-                    }
+                    let negated = compute_negated(&set, Some(pred));
+                    dset_result(fork(&set, |d: &Delta| !negated.contains(&d.id)))
                 }
-            }
+            })
+        }
+        Term::Group { key, of } => {
+            let root = root.ok_or("group requires an ambient root entity (E9)")?;
+            let (set, negated, _) = expect_dset(eval_term(of, input, Some(root))?, "group")?;
+            Ok(EvalResult::HView(eval_group(key, &set, &negated, root)))
+        }
+        Term::Prune { keep, of } => {
+            let r = eval_term(of, input, root)?;
+            let EvalResult::HView(h) = r else {
+                return Err("prune requires an HView operand (E9)".to_string());
+            };
+            Ok(EvalResult::HView(match keep {
+                PruneKeep::All => h,
+                PruneKeep::Match(m) => HView {
+                    id: h.id,
+                    props: h
+                        .props
+                        .into_iter()
+                        .filter(|(prop, _)| str_match(m, prop))
+                        .collect(),
+                },
+            }))
         }
     }
 }
 
-/// Canonical serialization of a DSet-sort result (ERRATA-2 E2): sorted id array, or for a
-/// top-level annotate, the map {"ids": [...], "negated": [...]}.
+/// Canonical serialization of an evaluation result (ERRATA-2 E2, E7).
 pub fn result_canonical_hex(result: &EvalResult) -> String {
-    let ids: Vec<CborValue> = result
-        .set
-        .ids()
-        .into_iter()
-        .map(|id| CborValue::Tstr(id.to_string()))
-        .collect();
-    let bytes = if !result.annotated {
-        encode(&CborValue::Array(ids))
-    } else {
-        let negated: Vec<CborValue> = result
-            .negated
-            .iter()
-            .map(|id| CborValue::Tstr(id.clone()))
-            .collect();
-        encode(&CborValue::Map(vec![
-            ("ids".to_string(), CborValue::Array(ids)),
-            ("negated".to_string(), CborValue::Array(negated)),
-        ]))
-    };
-    hex::encode(bytes)
+    match result {
+        EvalResult::HView(h) => hview_canonical_hex(h),
+        EvalResult::DSet {
+            set,
+            negated,
+            annotated,
+        } => {
+            let ids: Vec<CborValue> = set
+                .ids()
+                .into_iter()
+                .map(|id| CborValue::Tstr(id.to_string()))
+                .collect();
+            let bytes = if !annotated {
+                encode(&CborValue::Array(ids))
+            } else {
+                let negated: Vec<CborValue> = negated
+                    .iter()
+                    .map(|id| CborValue::Tstr(id.clone()))
+                    .collect();
+                encode(&CborValue::Map(vec![
+                    ("ids".to_string(), CborValue::Array(ids)),
+                    ("negated".to_string(), CborValue::Array(negated)),
+                ]))
+            };
+            hex::encode(bytes)
+        }
+    }
 }

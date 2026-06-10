@@ -4,7 +4,7 @@
 use serde_json::Value;
 use unicode_normalization::UnicodeNormalization;
 
-use crate::eval::{MaskPolicy, Term};
+use crate::eval::{GroupKey, MaskPolicy, PruneKeep, Term};
 use crate::pred::{Cmp, Field, MatchConst, PPred, Pred, StrMatch, ValMatch};
 use crate::types::Primitive;
 
@@ -229,6 +229,21 @@ fn parse_mask_policy(raw: &Value) -> Result<MaskPolicy, String> {
     Err("mask policy must be drop | annotate | {trust: Pred}".to_string())
 }
 
+fn parse_group_key(raw: &Value) -> Result<GroupKey, String> {
+    if raw == "byTargetContext" {
+        return Ok(GroupKey::ByTargetContext);
+    }
+    if raw == "byRole" {
+        return Ok(GroupKey::ByRole);
+    }
+    if let Some(o) = raw.as_object() {
+        if let Some(s) = o.get("const").and_then(Value::as_str) {
+            return Ok(GroupKey::Const(nfc(s)));
+        }
+    }
+    Err("group key must be byTargetContext | byRole | {const: string}".to_string())
+}
+
 pub fn parse_term(raw: &Value) -> Result<Term, String> {
     if raw == "input" {
         return Ok(Term::Input);
@@ -247,6 +262,22 @@ pub fn parse_term(raw: &Value) -> Result<Term, String> {
             policy: parse_mask_policy(o.get("policy").unwrap_or(&Value::Null))?,
             of: Box::new(parse_term(o.get("in").unwrap_or(&Value::Null))?),
         }),
+        Some("group") => Ok(Term::Group {
+            key: parse_group_key(o.get("key").unwrap_or(&Value::Null))?,
+            of: Box::new(parse_term(o.get("in").unwrap_or(&Value::Null))?),
+        }),
+        Some("prune") => {
+            let keep_raw = o.get("keep").unwrap_or(&Value::Null);
+            let keep = if keep_raw == "all" {
+                PruneKeep::All
+            } else {
+                PruneKeep::Match(parse_str_match(keep_raw, "prune.keep")?)
+            };
+            Ok(Term::Prune {
+                keep,
+                of: Box::new(parse_term(o.get("in").unwrap_or(&Value::Null))?),
+            })
+        }
         other => Err(format!("unknown term op {other:?}")),
     }
 }

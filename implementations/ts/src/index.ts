@@ -21,6 +21,7 @@ export { DeltaSet, federate, fork, makeDelta, makeNegationClaims, merge } from "
 export {
   comparePrimitives,
   evalPred,
+  strMatch,
   type Cmp,
   type PPred,
   type Pred,
@@ -31,7 +32,9 @@ export {
   evalTerm,
   resultCanonicalHex,
   type EvalResult,
+  type GroupKey,
   type MaskPolicy,
   type Term,
 } from "./eval.js";
+export { hviewCanonicalHex, type HVEntry, type HView } from "./hview.js";
 export { parsePred, parseTerm } from "./term-json.js";

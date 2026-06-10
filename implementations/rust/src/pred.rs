@@ -128,7 +128,7 @@ fn compare_with(cmp: Cmp, subject: &Primitive, constant: &MatchConst) -> bool {
 
 // --- evaluation ------------------------------------------------------------------------------------
 
-fn str_match(m: &StrMatch, s: &str) -> bool {
+pub fn str_match(m: &StrMatch, s: &str) -> bool {
     match m {
         StrMatch::Exact(v) => s == v,
         StrMatch::Prefix(v) => s.starts_with(v.as_str()),

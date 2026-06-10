@@ -399,6 +399,7 @@ const evalCases: Array<{ name: string; spec: string; term: unknown; note?: strin
 const evalVectors = evalCases.map(({ name, spec, term, note }) => {
   const parsed = parseTerm(term);
   const result = evalTerm(parsed, fixtureSet);
+  if (result.sort !== "dset") throw new Error(`${name}: expected a DSet result`);
   const expected: { ids: string[]; negated?: string[] } = { ids: result.set.ids() };
   if (result.annotated) expected.negated = [...result.negated].sort();
   return {
@@ -423,6 +424,161 @@ writeFileSync(resolve(evalDir, "eval-basic.json"), `${JSON.stringify(evalOut, nu
 console.log(
   `wrote ${evalVectors.length} eval vectors over ${fixtureSet.size} fixture deltas to vectors/l1-eval/eval-basic.json`,
 );
+// --- l1-eval: group/prune into HyperViews (ERRATA-2 E6-E9) ---
+
+// Extend the movie fixture with multi-context and contextless filing probes.
+addFx(
+  "d9-variant",
+  claim(700, C, [
+    { role: "subject", ...subj("movie:matrix", "title") },
+    { role: "variantOf", ...subj("movie:matrix", "related") },
+    { role: "value", target: { value: "The Matrix (1999)" } },
+  ]),
+);
+addFx(
+  "d10-contextless-mention",
+  claim(800, B, [{ role: "mentions", target: { entityRef: { id: "movie:matrix" } } }]),
+);
+
+const hviewFixtureSet = DeltaSet.from(
+  Object.values(fx).map((f) => makeDelta(parseClaims(f.claims))),
+);
+
+const MATRIX = "movie:matrix";
+const canonicalIdiom = {
+  op: "group",
+  key: "byTargetContext",
+  in: { op: "mask", policy: "drop", in: sel({ hasPointer: { targetEntity: MATRIX } }) },
+};
+
+const hviewCases: Array<{
+  name: string;
+  spec: string;
+  root: string;
+  term: unknown;
+  note?: string;
+}> = [
+  {
+    name: "group-by-target-context-canonical-idiom",
+    spec: "SPEC-2 §4.4 / SPEC-3 §2 / E6",
+    root: MATRIX,
+    term: canonicalIdiom,
+    note: "select relevant, drop negated, file by target-context — the canonical schema body",
+  },
+  {
+    name: "group-by-role",
+    spec: "SPEC-2 §4.4 / E6",
+    root: MATRIX,
+    term: { op: "group", key: "byRole", in: sel({ hasPointer: { targetEntity: MATRIX } }) },
+  },
+  {
+    name: "group-const-bags-everything",
+    spec: "SPEC-2 §4.4 / E6 (const files without a filing pointer)",
+    root: MATRIX,
+    term: {
+      op: "group",
+      key: { const: "claims" },
+      in: sel({ match: { field: "author", cmp: "eq", const: A } }),
+    },
+  },
+  {
+    name: "group-threads-annotate-tags",
+    spec: "SPEC-5 §4 audit views / E7",
+    root: MATRIX,
+    term: {
+      op: "group",
+      key: "byTargetContext",
+      in: { op: "mask", policy: "annotate", in: "input" },
+    },
+    note: "d2 is negated in the full input, so its entry carries negated: true",
+  },
+  {
+    name: "group-by-target-context-skips-contextless",
+    spec: "E6 (a filing pointer without context files nothing)",
+    root: MATRIX,
+    term: {
+      op: "group",
+      key: "byTargetContext",
+      in: sel({ match: { field: "author", cmp: "eq", const: B } }),
+    },
+  },
+  {
+    name: "group-by-role-files-contextless",
+    spec: "E6 (byRole files under the pointer role)",
+    root: MATRIX,
+    term: {
+      op: "group",
+      key: "byRole",
+      in: sel({ match: { field: "author", cmp: "eq", const: B } }),
+    },
+  },
+  {
+    name: "group-empty-root",
+    spec: "SPEC-3 §7 (empty props, never null)",
+    root: "movie:nonexistent",
+    term: { op: "group", key: "byTargetContext", in: "input" },
+  },
+  {
+    name: "prune-keep-exact",
+    spec: "SPEC-2 §4.6 / E8",
+    root: MATRIX,
+    term: { op: "prune", keep: { exact: "title" }, in: canonicalIdiom },
+  },
+  {
+    name: "prune-keep-inset",
+    spec: "SPEC-2 §4.6 / E8",
+    root: MATRIX,
+    term: { op: "prune", keep: { inSet: ["title", "rating"] }, in: canonicalIdiom },
+  },
+  {
+    name: "prune-keep-prefix",
+    spec: "SPEC-2 §4.6 / E8",
+    root: MATRIX,
+    term: { op: "prune", keep: { prefix: "re" }, in: canonicalIdiom },
+  },
+  {
+    name: "prune-all-is-identity",
+    spec: "SPEC-2 §4.6 / E8",
+    root: MATRIX,
+    term: { op: "prune", keep: "all", in: canonicalIdiom },
+  },
+];
+
+const hviewVectors = hviewCases.map(({ name, spec, root, term, note }) => {
+  const result = evalTerm(parseTerm(term), hviewFixtureSet, root);
+  if (result.sort !== "hview") throw new Error(`${name}: expected an HView result`);
+  const props: Record<string, Array<{ id: string; negated?: boolean }>> = {};
+  for (const [prop, entries] of [...result.hview.props.entries()].sort(([a], [b]) =>
+    a < b ? -1 : 1,
+  )) {
+    props[prop] = entries.map((e) => ({
+      id: e.delta.id,
+      ...(e.negated ? { negated: true } : {}),
+    }));
+  }
+  return {
+    name,
+    spec,
+    ...(note === undefined ? {} : { note }),
+    root,
+    term,
+    expected: { id: result.hview.id, props },
+    expectedCanonicalHex: resultCanonicalHex(result),
+  };
+});
+
+const hviewOut = {
+  fixture: {
+    note: "the eval-basic fixture plus d9 (multi-context filing) and d10 (contextless pointer)",
+    deltas: Object.entries(fx).map(([name, f]) => ({ name, id: f.id, claims: f.claims })),
+  },
+  cases: hviewVectors,
+};
+writeFileSync(resolve(evalDir, "eval-hview.json"), `${JSON.stringify(hviewOut, null, 2)}\n`);
+console.log(
+  `wrote ${hviewVectors.length} hview vectors over ${hviewFixtureSet.size} fixture deltas to vectors/l1-eval/eval-hview.json`,
+);
+
 // the fixture ids double as documentation: surface two for sanity
 console.log(
   `  d2=${idOf("d2-title-reloaded").slice(0, 12)}… d4=${idOf("d4-negates-d2").slice(0, 12)}…`,

@@ -105,7 +105,7 @@ function compareWith(
 
 // --- evaluation ----------------------------------------------------------------------------------
 
-function strMatch(m: StrMatch, s: string): boolean {
+export function strMatch(m: StrMatch, s: string): boolean {
   switch (m.kind) {
     case "exact":
       return s === m.value;

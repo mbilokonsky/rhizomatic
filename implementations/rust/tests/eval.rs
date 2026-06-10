@@ -1,7 +1,9 @@
 //! Evaluator vectors + law-level property tests. Mirrors ../ts/test/eval.test.ts.
 
+use std::collections::BTreeSet;
+
 use proptest::prelude::*;
-use rhizomatic::eval::{eval_term, result_canonical_hex, MaskPolicy, Term};
+use rhizomatic::eval::{eval_term, result_canonical_hex, EvalResult, MaskPolicy, Term};
 use rhizomatic::json_profile::parse_claims;
 use rhizomatic::pred::{eval_pred, Pred};
 use rhizomatic::set::{fork, make_delta, merge, DeltaSet};
@@ -28,6 +30,13 @@ fn fixture_set(doc: &Value) -> DeltaSet {
     .unwrap()
 }
 
+fn as_dset(r: EvalResult) -> (DeltaSet, BTreeSet<String>) {
+    match r {
+        EvalResult::DSet { set, negated, .. } => (set, negated),
+        EvalResult::HView(_) => panic!("expected a DSet result"),
+    }
+}
+
 #[test]
 fn fixture_ids_match() {
     let doc = load_eval_basic();
@@ -44,14 +53,16 @@ fn eval_vectors() {
     for c in doc["cases"].as_array().unwrap() {
         let name = c["name"].as_str().unwrap();
         let term = parse_term(&c["term"]).unwrap_or_else(|e| panic!("parse {name}: {e}"));
-        let result = eval_term(&term, &input);
+        let result = eval_term(&term, &input, None).unwrap();
+        let hex = result_canonical_hex(&result);
+        let (set, negated) = as_dset(result);
         let expected_ids: Vec<&str> = c["expected"]["ids"]
             .as_array()
             .unwrap()
             .iter()
             .map(|x| x.as_str().unwrap())
             .collect();
-        assert_eq!(result.set.ids(), expected_ids, "ids mismatch for {name}");
+        assert_eq!(set.ids(), expected_ids, "ids mismatch for {name}");
         if let Some(neg) = c["expected"].get("negated") {
             let expected_neg: Vec<&str> = neg
                 .as_array()
@@ -59,11 +70,11 @@ fn eval_vectors() {
                 .iter()
                 .map(|x| x.as_str().unwrap())
                 .collect();
-            let actual_neg: Vec<&str> = result.negated.iter().map(String::as_str).collect();
+            let actual_neg: Vec<&str> = negated.iter().map(String::as_str).collect();
             assert_eq!(actual_neg, expected_neg, "negated mismatch for {name}");
         }
         assert_eq!(
-            result_canonical_hex(&result),
+            hex,
             c["expectedCanonicalHex"].as_str().unwrap(),
             "canonical result mismatch for {name}"
         );
@@ -133,46 +144,50 @@ fn select(p: Pred, of: Term) -> Term {
     }
 }
 
+fn eval_dset(term: &Term, input: &DeltaSet) -> DeltaSet {
+    as_dset(eval_term(term, input, None).unwrap()).0
+}
+
 proptest! {
     #[test]
     fn select_composes_by_conjunction(d in delta_set(), p in pred(), q in pred()) {
-        let nested = eval_term(&select(p.clone(), select(q.clone(), Term::Input)), &d);
-        let conj = eval_term(&select(Pred::And(Box::new(p), Box::new(q)), Term::Input), &d);
-        prop_assert_eq!(nested.set.digest(), conj.set.digest());
+        let nested = eval_dset(&select(p.clone(), select(q.clone(), Term::Input)), &d);
+        let conj = eval_dset(&select(Pred::And(Box::new(p), Box::new(q)), Term::Input), &d);
+        prop_assert_eq!(nested.digest(), conj.digest());
     }
 
     #[test]
     fn select_is_monotone(a in delta_set(), b in delta_set(), p in pred()) {
-        let small = eval_term(&select(p.clone(), Term::Input), &a);
-        let big = eval_term(&select(p, Term::Input), &merge(&a, &b));
-        for d in small.set.iter() {
-            prop_assert!(big.set.contains(&d.id));
+        let small = eval_dset(&select(p.clone(), Term::Input), &a);
+        let big = eval_dset(&select(p, Term::Input), &merge(&a, &b));
+        for d in small.iter() {
+            prop_assert!(big.contains(&d.id));
         }
     }
 
     #[test]
     fn mask_drop_is_subset(d in delta_set()) {
-        let masked = eval_term(&Term::Mask { policy: MaskPolicy::Drop, of: Box::new(Term::Input) }, &d);
-        for x in masked.set.iter() {
+        let masked = eval_dset(&Term::Mask { policy: MaskPolicy::Drop, of: Box::new(Term::Input) }, &d);
+        for x in masked.iter() {
             prop_assert!(d.contains(&x.id));
         }
     }
 
     #[test]
     fn union_of_selects_is_select_of_or(d in delta_set(), p in pred(), q in pred()) {
-        let via_union = eval_term(&Term::Union {
+        let via_union = eval_dset(&Term::Union {
             left: Box::new(select(p.clone(), Term::Input)),
             right: Box::new(select(q.clone(), Term::Input)),
         }, &d);
-        let via_or = eval_term(&select(Pred::Or(Box::new(p), Box::new(q)), Term::Input), &d);
-        prop_assert_eq!(via_union.set.digest(), via_or.set.digest());
+        let via_or = eval_dset(&select(Pred::Or(Box::new(p), Box::new(q)), Term::Input), &d);
+        prop_assert_eq!(via_union.digest(), via_or.digest());
     }
 
     #[test]
     fn select_agrees_with_fork(d in delta_set(), p in pred()) {
-        let via_term = eval_term(&select(p.clone(), Term::Input), &d);
+        let via_term = eval_dset(&select(p.clone(), Term::Input), &d);
         let via_fork = fork(&d, |x: &Delta| eval_pred(&p, x));
-        prop_assert_eq!(via_term.set.digest(), via_fork.digest());
+        prop_assert_eq!(via_term.digest(), via_fork.digest());
     }
 }
 

@@ -18,11 +18,10 @@ model has a single numeric type — emitting only floats removes the integral-do
 ambiguity that otherwise fractures cross-implementation interop.
 
 - **-0.0 is normalized to +0.0** before encoding (`n + 0.0`), so the two never produce distinct ids.
-- **v0 shortest-float rule (partial):** encode as **float32** (`0xfa`) when the value round-trips
-  exactly through f32 (`fround(n) === n` / `n as f32 as f64 == n`), otherwise **float64** (`0xfb`).
-  - **Deviation from RFC 8949 §4.2.1, tracked:** the float16 (`0xf9`) reduction is **deferred** to
-    slice M0.x. Until then small values that *could* be half-floats are encoded as f32. This is fully
-    deterministic and parity-safe; it is only sub-optimal in size. Closing it is a pure vector regen.
+- **Shortest-float rule (full RFC 8949 §4.2.1, closed in M0.2):** encode in the shortest of
+  **float16** (`0xf9`) / **float32** (`0xfa`) / **float64** (`0xfb`) that represents the value
+  *exactly* (including f16 subnormals down to 2^-24). Vectors include the RFC 8949 Appendix A float
+  cases and the f16/f32 boundary probes (65504 vs 65505, 2^-24 vs 2^-25).
 
 ## D2 — String encoding
 
@@ -84,3 +83,9 @@ target in JSON is tagged to keep parsing unambiguous:
 ```
 
 `value` carries a string | number | boolean primitive; `entityRef`/`deltaRef` carry the ref objects.
+
+**JSON number parsing MUST be correctly rounded.** A consumer of the JSON profile MUST parse decimal
+numbers to the nearest f64 (ties-to-even). This is not academic: serde_json's default fast path can
+be 1 ULP off, which the `float-f16-min-subnormal` vector caught as a canonical-bytes divergence
+between Rust and JS. The Rust implementation therefore requires serde_json's `float_roundtrip`
+feature. Any future implementation language needs the equivalent guarantee.

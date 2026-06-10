@@ -39,8 +39,38 @@ fn write_head(out: &mut Vec<u8>, major: u8, arg: u64) {
     }
 }
 
-// ERRATA D1: numbers encode as float only; f32 when it round-trips exactly, else f64.
-// (-0.0 normalized to +0.0; float16 reduction deferred to M0.x.)
+/// Returns the IEEE-754 binary16 bit pattern for `n` if (and only if) f16 represents it exactly.
+/// `n` must be finite and exactly representable as f32 (caller guarantees both).
+fn try_f16_bits(n: f64) -> Option<u16> {
+    let bits = (n as f32).to_bits();
+    let sign = (((bits >> 31) & 1) as u16) << 15;
+    let exp = ((bits >> 23) & 0xff) as i32;
+    let mant = bits & 0x7f_ffff;
+    if exp == 0 && mant == 0 {
+        return Some(sign); // zero (-0 already normalized away by caller)
+    }
+    let e = exp - 127; // unbiased exponent (f32 subnormals land at -127 and fall through)
+    if (-14..=15).contains(&e) {
+        // f16 normal range: the 23-bit mantissa must fit in 10 bits.
+        if mant & 0x1fff != 0 {
+            return None;
+        }
+        return Some(sign | (((e + 15) as u16) << 10) | (mant >> 13) as u16);
+    }
+    if (-24..=-15).contains(&e) {
+        // f16 subnormal range: value must be an exact multiple of 2^-24.
+        let shift = -(e + 1) as u32; // 14..=23
+        let sig = 0x80_0000u32 | mant; // full 24-bit significand
+        if sig & ((1 << shift) - 1) != 0 {
+            return None;
+        }
+        return Some(sign | (sig >> shift) as u16);
+    }
+    None
+}
+
+// ERRATA D1: numbers encode as float only, in the shortest of f16/f32/f64 that represents the
+// value exactly (RFC 8949 §4.2.1). -0.0 is normalized to +0.0.
 fn write_float(out: &mut Vec<u8>, value: f64) {
     assert!(
         value.is_finite(),
@@ -48,6 +78,11 @@ fn write_float(out: &mut Vec<u8>, value: f64) {
     );
     let n = value + 0.0; // normalize -0 to +0
     if (n as f32) as f64 == n {
+        if let Some(h) = try_f16_bits(n) {
+            out.push(0xf9);
+            out.extend_from_slice(&h.to_be_bytes());
+            return;
+        }
         out.push(0xfa);
         out.extend_from_slice(&(n as f32).to_be_bytes());
     } else {

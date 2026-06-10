@@ -62,14 +62,44 @@ function writeHead(sink: ByteSink, major: number, arg: number): void {
 
 const fbuf = new DataView(new ArrayBuffer(8));
 
-// ERRATA D1: numbers encode as float only; f32 when it round-trips exactly, else f64.
-// (-0.0 normalized to +0.0; float16 reduction deferred to M0.x.)
+// Returns the IEEE-754 binary16 bit pattern for n if (and only if) f16 represents n exactly,
+// else null. n must be finite and exactly representable as f32 (caller guarantees both).
+function tryF16Bits(n: number): number | null {
+  fbuf.setFloat32(0, n);
+  const bits = fbuf.getUint32(0);
+  const sign = ((bits >>> 31) & 1) << 15;
+  const exp = (bits >>> 23) & 0xff;
+  const mant = bits & 0x7fffff;
+  if (exp === 0 && mant === 0) return sign; // zero (-0 already normalized away by caller)
+  const e = exp - 127; // unbiased exponent (f32 subnormals land at -127 and fall through)
+  if (e >= -14 && e <= 15) {
+    // f16 normal range: the 23-bit mantissa must fit in 10 bits.
+    if ((mant & 0x1fff) !== 0) return null;
+    return sign | ((e + 15) << 10) | (mant >>> 13);
+  }
+  if (e >= -24 && e <= -15) {
+    // f16 subnormal range: value must be an exact multiple of 2^-24.
+    const shift = -(e + 1); // 14..23
+    const sig = 0x800000 | mant; // full 24-bit significand
+    if ((sig & ((1 << shift) - 1)) !== 0) return null;
+    return sign | (sig >>> shift);
+  }
+  return null;
+}
+
+// ERRATA D1: numbers encode as float only, in the shortest of f16/f32/f64 that represents the
+// value exactly (RFC 8949 §4.2.1). -0.0 is normalized to +0.0.
 function writeFloat(sink: ByteSink, value: number): void {
   if (!Number.isFinite(value)) {
     throw new Error(`non-finite number is not representable: ${value}`);
   }
   const n = value + 0; // normalize -0 to +0
   if (Math.fround(n) === n) {
+    const h = tryF16Bits(n);
+    if (h !== null) {
+      sink.push(0xf9, (h >>> 8) & 0xff, h & 0xff);
+      return;
+    }
     fbuf.setFloat32(0, n);
     sink.push(0xfa, fbuf.getUint8(0), fbuf.getUint8(1), fbuf.getUint8(2), fbuf.getUint8(3));
   } else {

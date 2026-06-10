@@ -61,5 +61,5 @@ fn nfc_normalizes_text() {
 
 #[test]
 fn normalizes_negative_zero() {
-    assert_eq!(hex::encode(encode(&CborValue::Float(-0.0))), "fa00000000");
+    assert_eq!(hex::encode(encode(&CborValue::Float(-0.0))), "f90000");
 }

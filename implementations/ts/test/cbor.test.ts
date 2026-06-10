@@ -67,6 +67,6 @@ describe("cbor composites", () => {
   });
 
   it("normalizes -0 to +0", () => {
-    expect(bytesToHex(encode(float(-0)))).toBe("fa00000000");
+    expect(bytesToHex(encode(float(-0)))).toBe("f90000");
   });
 });

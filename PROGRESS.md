@@ -135,6 +135,28 @@ all have two working citizens.** Next per the loop charter: the REFERENCE APP sh
 capabilities (superposition, policies-as-lenses, time-travel, federation, derived authors),
 plus polish (README status update, top-level parity runner, CI).
 
+## Post-M5: the showcase + mechanical enforcement
+
+- **Reference demo** ✅ — implementations/ts/demo/demo.ts (`npm run demo`): a seven-act story
+  (superposition → policy lenses → retraction/audit → time travel → federation → derived
+  authors → packs), smoke-tested in the suite.
+- **Interactive playground** ✅ — implementations/ts/demo/playground/ (`npm run
+  playground:build`, or the `playground` launch config): three sovereign peers in a browser;
+  author/retract/sync; policy + as-of + audit lenses; provenance panel. Verified interactively
+  (digests converge on screen after sync).
+- **CI** ✅ — .github/workflows/ci.yml: both green-gates + vector-freshness + playground build
+  on every push; first runs green on ubuntu (canonical bytes reproduce cross-platform).
+  Top-level parity runner: `node tools/check-all.mjs`.
+
+## Queued next (in value order)
+
+1. **WASM host ABI proposal** — SPEC-7 §10's flagged biggest open surface. Draft as a clearly
+   marked proposal doc (input HView delivery format, emission API, capability handles),
+   building on the working native-fn lifecycle (ERRATA-7). Spec text first, then a host.
+2. **HTTP/WS transport binding** for federation (SPEC-6 §9) over the existing Peer protocol.
+3. **`rdb.*` prefix decision** — the user's call; one-constant change + vector regen when made.
+4. Deeper conformance vectors (alias closure, parameterized terms/holes, keyed emission).
+
 ## Slice log
 
 ### M0.1 — canonical CBOR + content-addressed id  *(✅ complete, parity verified)*

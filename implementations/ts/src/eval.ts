@@ -5,6 +5,7 @@
 import { array, encode, map, tstr } from "./cbor.js";
 import { bytesToHex } from "./hash.js";
 import { hviewCanonicalHex, type HVEntry, type HView } from "./hview.js";
+import { resolveView, viewCanonicalHex, type Policy, type View } from "./policy.js";
 import { evalPred, strMatch, type Pred, type StrMatch } from "./pred.js";
 import { SchemaRegistry } from "./schema.js";
 import { DeltaSet, fork, merge } from "./set.js";
@@ -28,7 +29,8 @@ export type Term =
   | { readonly kind: "group"; readonly key: GroupKey; readonly of: Term }
   | { readonly kind: "prune"; readonly keep: "all" | StrMatch; readonly of: Term }
   | { readonly kind: "expand"; readonly role: StrMatch; readonly schema: string; readonly of: Term }
-  | { readonly kind: "fix"; readonly schema: string; readonly entity: string };
+  | { readonly kind: "fix"; readonly schema: string; readonly entity: string }
+  | { readonly kind: "resolve"; readonly policy: Policy; readonly of: Term };
 
 interface DSetResult {
   readonly sort: "dset";
@@ -43,7 +45,13 @@ interface HViewResult {
   readonly hview: HView;
 }
 
-export type EvalResult = DSetResult | HViewResult;
+// The terminal sort: no operator consumes a View (SPEC-2 §4.7, ERRATA-5 R7).
+interface ViewResult {
+  readonly sort: "view";
+  readonly view: View;
+}
+
+export type EvalResult = DSetResult | HViewResult | ViewResult;
 
 const dsetResult = (set: DeltaSet): DSetResult => ({
   sort: "dset",
@@ -203,6 +211,10 @@ export function evalTerm(
     case "fix":
       // The invocation instruction: ambient root is set to the entity explicitly (E10).
       return { sort: "hview", hview: evalSchema(term.schema, input, term.entity, registry) };
+    case "resolve": {
+      const of = expectHView(evalTerm(term.of, input, root, registry), "resolve");
+      return { sort: "view", view: resolveView(term.policy, of.hview) };
+    }
   }
 }
 
@@ -227,6 +239,7 @@ function evalSchema(
 
 // Canonical serialization of an evaluation result (ERRATA-2 E2, E7).
 export function resultCanonicalHex(result: EvalResult): string {
+  if (result.sort === "view") return viewCanonicalHex(result.view);
   if (result.sort === "hview") return hviewCanonicalHex(result.hview);
   const ids = result.set.ids().map(tstr);
   if (!result.annotated) return bytesToHex(encode(array(ids)));

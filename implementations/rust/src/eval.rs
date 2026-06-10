@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::cbor::{encode, CborValue};
 use crate::hview::{hview_canonical_hex, HVEntry, HView};
+use crate::policy::{resolve_view, view_canonical_hex, Policy, View};
 use crate::pred::{eval_pred, str_match, Pred, StrMatch};
 use crate::schema::SchemaRegistry;
 use crate::set::{fork, merge, DeltaSet};
@@ -63,6 +64,10 @@ pub enum Term {
         schema: String,
         entity: String,
     },
+    Resolve {
+        policy: Policy,
+        of: Box<Term>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -74,6 +79,8 @@ pub enum EvalResult {
         annotated: bool,
     },
     HView(HView),
+    /// The terminal sort: no operator consumes a View (SPEC-2 §4.7, ERRATA-5 R7).
+    View(View),
 }
 
 fn dset_result(set: DeltaSet) -> EvalResult {
@@ -192,7 +199,7 @@ fn eval_schema(
         .ok_or(format!("unknown schema: {name} (E10)"))?;
     match eval_term(&schema.body, input, Some(root), Some(registry))? {
         EvalResult::HView(h) => Ok(h),
-        EvalResult::DSet { .. } => Err(format!(
+        _ => Err(format!(
             "schema {name} body must be an HView-sort term (E10)"
         )),
     }
@@ -207,13 +214,13 @@ pub fn eval_term(
     fn expect_dset(r: EvalResult, op: &str) -> Result<(DeltaSet, BTreeSet<String>), String> {
         match r {
             EvalResult::DSet { set, negated, .. } => Ok((set, negated)),
-            EvalResult::HView(_) => Err(format!("{op} requires a DSet operand (E9)")),
+            _ => Err(format!("{op} requires a DSet operand (E9)")),
         }
     }
     fn expect_hview(r: EvalResult, op: &str) -> Result<HView, String> {
         match r {
             EvalResult::HView(h) => Ok(h),
-            EvalResult::DSet { .. } => Err(format!("{op} requires an HView operand (E9)")),
+            _ => Err(format!("{op} requires an HView operand (E9)")),
         }
     }
     match term {
@@ -299,12 +306,17 @@ pub fn eval_term(
                 schema, input, entity, registry,
             )?))
         }
+        Term::Resolve { policy, of } => {
+            let h = expect_hview(eval_term(of, input, root, registry)?, "resolve")?;
+            Ok(EvalResult::View(resolve_view(policy, &h)))
+        }
     }
 }
 
 /// Canonical serialization of an evaluation result (ERRATA-2 E2, E7).
 pub fn result_canonical_hex(result: &EvalResult) -> String {
     match result {
+        EvalResult::View(v) => view_canonical_hex(v),
         EvalResult::HView(h) => hview_canonical_hex(h),
         EvalResult::DSet {
             set,

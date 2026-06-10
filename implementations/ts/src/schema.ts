@@ -20,6 +20,7 @@ export function collectRefs(term: Term): string[] {
       case "mask":
       case "group":
       case "prune":
+      case "resolve":
         walk(t.of);
         return;
       case "union":

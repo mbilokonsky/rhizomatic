@@ -48,8 +48,13 @@ be correct and boring. Slices:
   sets the ambient root explicitly. Vectors: keanu↔brzrkr DATA cycle terminating through a finite
   schema DAG (MovieDeep→ActorWithWorks→MovieBasic, depth 3), graceful-degradation cases. v0
   SchemaRef is a registry name; pinned-hash/evolvable modes arrive in M1.5.
-- **M1.4 — resolve + policy terms (SPEC-5).** pick/all/merge/conflicts/absentAs; Order chains
-  bottoming in lexById; the closed MergeFn set; edge semantics (§4) incl. mixed-type ordering.
+- **M1.4 — resolve + policy terms (SPEC-5).** ✅ **complete — all 8 operators now live.** Full
+  policy grammar (pick/all/merge/conflicts/absentAs; byTimestamp/byAuthorRank/byPred/lexById with
+  structural lexById tiebreak); View sort (terminal) + canonical CBOR; new spec/05-resolution.ERRATA.md
+  pins candidate-value extraction (R1), MergeFn domains + id-order folds (R2), policy JSON (R3),
+  View shape (R4), annotate-candidates (R5), same-policy nested resolution (R6). 10 vectors incl.
+  superposition pick, trust-ranked pick, mixed-type max, float-sum, conflicts, absentAs, nested
+  expansion resolution; P5-pluralism witnessed in both impls (same HView, two policies, two truths).
 - **M1.5 — schemas-as-deltas + the `rdb.SchemaSchema` bootstrap.** Round-trip deltas → term →
   canonical CBOR → hash; pin the bootstrap schema constant in vectors (SPEC-3 §5).
 

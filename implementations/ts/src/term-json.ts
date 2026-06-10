@@ -2,6 +2,7 @@
 // time so term-side comparisons are NFC-vs-NFC (data strings are NFC by validation, D11).
 
 import type { GroupKey, MaskPolicy, Term } from "./eval.js";
+import type { MergeFn, Order, Policy, PropPolicy } from "./policy.js";
 import type { Cmp, EntityMatch, PPred, Pred, StrMatch, ValMatch } from "./pred.js";
 import type { Primitive } from "./types.js";
 
@@ -164,6 +165,72 @@ function parseMaskPolicy(raw: unknown): MaskPolicy {
   throw new Error("mask policy must be drop | annotate | {trust: Pred}");
 }
 
+const MERGE_FNS: readonly MergeFn[] = ["max", "min", "sum", "count", "and", "or", "concatSorted"];
+
+function parseOrder(raw: unknown): Order {
+  if (raw === "lexById") return { kind: "lexById" };
+  const o = asObject(raw, "order");
+  if (o["byTimestamp"] !== undefined) {
+    if (o["byTimestamp"] !== "desc" && o["byTimestamp"] !== "asc") {
+      throw new Error("byTimestamp must be desc | asc");
+    }
+    return { kind: "byTimestamp", dir: o["byTimestamp"] };
+  }
+  if (Array.isArray(o["byAuthorRank"])) {
+    return {
+      kind: "byAuthorRank",
+      authors: o["byAuthorRank"].map((a) => {
+        if (typeof a !== "string") throw new Error("byAuthorRank entries must be strings");
+        return nfc(a);
+      }),
+    };
+  }
+  if (o["byPred"] !== undefined) {
+    const p = asObject(o["byPred"], "byPred");
+    return { kind: "byPred", pred: parsePred(p["pred"]), then: parseOrder(p["then"]) };
+  }
+  throw new Error("order must be lexById | byTimestamp | byAuthorRank | byPred");
+}
+
+function parsePropPolicy(raw: unknown): PropPolicy {
+  const o = asObject(raw, "propPolicy");
+  if (o["pick"] !== undefined) {
+    return { kind: "pick", order: parseOrder(asObject(o["pick"], "pick")["order"]) };
+  }
+  if (o["all"] !== undefined) {
+    return { kind: "all", order: parseOrder(asObject(o["all"], "all")["order"]) };
+  }
+  if (o["merge"] !== undefined) {
+    if (!MERGE_FNS.includes(o["merge"] as MergeFn)) {
+      throw new Error("unknown merge fn " + String(o["merge"]));
+    }
+    return { kind: "merge", fn: o["merge"] as MergeFn };
+  }
+  if (o["conflicts"] !== undefined) {
+    return { kind: "conflicts", order: parseOrder(asObject(o["conflicts"], "conflicts")["order"]) };
+  }
+  if (o["absentAs"] !== undefined) {
+    const a = asObject(o["absentAs"], "absentAs");
+    return {
+      kind: "absentAs",
+      constant: parsePrimitive(a["const"], "absentAs.const"),
+      then: parsePropPolicy(a["then"]),
+    };
+  }
+  throw new Error("propPolicy must be pick | all | merge | conflicts | absentAs");
+}
+
+export function parsePolicy(raw: unknown): Policy {
+  const o = asObject(raw, "policy");
+  const props = new Map<string, PropPolicy>();
+  if (o["props"] !== undefined) {
+    for (const [k, v] of Object.entries(asObject(o["props"], "policy.props"))) {
+      props.set(nfc(k), parsePropPolicy(v));
+    }
+  }
+  return { props, default: parsePropPolicy(o["default"]) };
+}
+
 function parseGroupKey(raw: unknown): GroupKey {
   if (raw === "byTargetContext") return { kind: "byTargetContext" };
   if (raw === "byRole") return { kind: "byRole" };
@@ -198,6 +265,8 @@ export function parseTerm(raw: unknown): Term {
       if (typeof o["entity"] !== "string") throw new Error("fix.entity must be a string");
       return { kind: "fix", schema: nfc(o["schema"]), entity: nfc(o["entity"]) };
     }
+    case "resolve":
+      return { kind: "resolve", policy: parsePolicy(o["policy"]), of: parseTerm(o["in"]) };
     case "prune": {
       const keep = o["keep"] === "all" ? "all" : parseStrMatch(o["keep"], "prune.keep");
       return { kind: "prune", keep, of: parseTerm(o["in"]) };

@@ -739,6 +739,252 @@ console.log(
   `wrote ${expandVectors.length} expand vectors over ${expandFixtureSet.size} fixture deltas to vectors/l1-eval/eval-expand.json`,
 );
 
+// --- l1-eval: resolve + policy terms (SPEC-5, ERRATA-5 R1-R7) ---
+
+const rfx: Record<string, { claims: unknown; id: string }> = {};
+const addRfx = (name: string, claims: unknown) => {
+  rfx[name] = { claims, id: computeId(parseClaims(claims)) };
+};
+
+addRfx(
+  "t1-title-a",
+  claim(100, A, [
+    { role: "subject", ...subj("movie:matrix", "title") },
+    { role: "value", target: { value: "The Matrix" } },
+  ]),
+);
+addRfx(
+  "t2-title-b",
+  claim(200, B, [
+    { role: "subject", ...subj("movie:matrix", "title") },
+    { role: "value", target: { value: "Matrix Reloaded" } },
+  ]),
+);
+addRfx(
+  "y1-year",
+  claim(150, A, [
+    { role: "subject", ...subj("movie:matrix", "releaseYear") },
+    { role: "value", target: { value: 1999 } },
+  ]),
+);
+addRfx(
+  "r1-rating-a",
+  claim(500, A, [
+    { role: "subject", ...subj("movie:matrix", "rating") },
+    { role: "value", target: { value: 8.7 } },
+  ]),
+);
+addRfx(
+  "r2-rating-b",
+  claim(600, B, [
+    { role: "subject", ...subj("movie:matrix", "rating") },
+    { role: "value", target: { value: 9.1 } },
+  ]),
+);
+addRfx(
+  "g1-tag-scifi",
+  claim(120, C, [
+    { role: "subject", ...subj("movie:matrix", "tag") },
+    { role: "value", target: { value: "scifi" } },
+  ]),
+);
+addRfx(
+  "g2-tag-action",
+  claim(610, B, [
+    { role: "subject", ...subj("movie:matrix", "tag") },
+    { role: "value", target: { value: "action" } },
+  ]),
+);
+addRfx(
+  "s1-size-str",
+  claim(700, C, [
+    { role: "subject", ...subj("movie:matrix", "size") },
+    { role: "value", target: { value: "large" } },
+  ]),
+);
+addRfx(
+  "s2-size-num",
+  claim(710, A, [
+    { role: "subject", ...subj("movie:matrix", "size") },
+    { role: "value", target: { value: 3 } },
+  ]),
+);
+addRfx(
+  "n1-negates-t2",
+  claim(300, B, [{ role: "negates", target: { deltaRef: { delta: rfx["t2-title-b"]!.id } } }]),
+);
+addRfx(
+  "a1-keanu-name",
+  claim(110, A, [
+    { role: "subject", ...subj("actor:keanu", "name") },
+    { role: "value", target: { value: "Keanu Reeves" } },
+  ]),
+);
+addRfx(
+  "c1-cast",
+  claim(130, A, [
+    { role: "movie", ...subj("movie:matrix", "cast") },
+    { role: "actor", ...subj("actor:keanu", "filmography") },
+    { role: "character", target: { value: "Neo" } },
+  ]),
+);
+
+const resolveFixtureSet = DeltaSet.from(
+  Object.values(rfx).map((f) => makeDelta(parseClaims(f.claims))),
+);
+
+const rawBody = {
+  op: "group",
+  key: "byTargetContext",
+  in: sel({ hasPointer: { targetEntity: { var: "root" } } }),
+};
+const resolveSchemas = [
+  { name: "MovieRaw", alg: 1, body: rawBody },
+  { name: "MovieView", alg: 1, body: canonicalBody },
+  { name: "ActorNameV", alg: 1, body: canonicalBody },
+  {
+    name: "MovieCast",
+    alg: 1,
+    body: { op: "expand", role: { exact: "actor" }, schema: "ActorNameV", in: canonicalBody },
+  },
+];
+const resolveRegistry = SchemaRegistry.build(
+  resolveSchemas.map((s) => ({ name: s.name, alg: s.alg, body: parseTerm(s.body) })),
+);
+
+const latest = { pick: { order: { byTimestamp: "desc" } } };
+const fixMovie = (schema: string) => ({ op: "fix", schema, entity: "movie:matrix" });
+const res = (policy: unknown, of: unknown) => ({ op: "resolve", policy, in: of });
+
+const resolveCases: Array<{ name: string; spec: string; term: unknown; note?: string }> = [
+  {
+    name: "pick-latest-superposed",
+    spec: "SPEC-5 §3 pick/byTimestamp",
+    term: res({ default: latest }, fixMovie("MovieRaw")),
+    note: "no mask: both titles superposed; last-claim-wins picks Matrix Reloaded; size picks 3 (ts 710)",
+  },
+  {
+    name: "pick-latest-after-mask-drop",
+    spec: "SPEC-5 §4 (negation already happened upstream)",
+    term: res({ default: latest }, fixMovie("MovieView")),
+    note: "t2 negated by n1: title resolves to The Matrix",
+  },
+  {
+    name: "pick-by-author-rank",
+    spec: "SPEC-5 §3 byAuthorRank (the trust primitive)",
+    term: res({ default: { pick: { order: { byAuthorRank: [A, B, C] } } } }, fixMovie("MovieRaw")),
+  },
+  {
+    name: "pick-by-pred-prefers-carol",
+    spec: "SPEC-5 §3 byPred",
+    term: res(
+      {
+        default: {
+          pick: {
+            order: {
+              byPred: {
+                pred: { match: { field: "author", cmp: "eq", const: C } },
+                then: { byTimestamp: "desc" },
+              },
+            },
+          },
+        },
+      },
+      fixMovie("MovieRaw"),
+    ),
+    note: "tag prefers scifi (Carol's), size prefers large (Carol's)",
+  },
+  {
+    name: "all-ascending",
+    spec: "SPEC-5 §3 all",
+    term: res(
+      { props: { tag: { all: { order: { byTimestamp: "asc" } } } }, default: latest },
+      fixMovie("MovieRaw"),
+    ),
+  },
+  {
+    name: "merge-max-min-sum-count",
+    spec: "SPEC-5 §3 MergeFn / ERRATA-5 R2",
+    term: res(
+      {
+        props: {
+          rating: { merge: "sum" },
+          tag: { merge: "count" },
+          size: { merge: "max" },
+          releaseYear: { merge: "min" },
+        },
+        default: latest,
+      },
+      fixMovie("MovieRaw"),
+    ),
+    note: "sum folds in id order (8.7+9.1); size max is the STRING large by canonical type order",
+  },
+  {
+    name: "merge-concat-sorted",
+    spec: "SPEC-5 §3 MergeFn",
+    term: res({ props: { tag: { merge: "concatSorted" } }, default: latest }, fixMovie("MovieRaw")),
+  },
+  {
+    name: "conflicts-surfaces-disagreement",
+    spec: "SPEC-5 §3 conflicts",
+    term: res(
+      {
+        props: {
+          title: { conflicts: { order: { byTimestamp: "desc" } } },
+          releaseYear: { conflicts: { order: { byTimestamp: "desc" } } },
+        },
+        default: latest,
+      },
+      fixMovie("MovieRaw"),
+    ),
+    note: "title has 2 distinct claims -> surfaced; releaseYear has 1 -> absent",
+  },
+  {
+    name: "absent-as-default",
+    spec: "SPEC-5 §3 absentAs / §4 empty property",
+    term: res(
+      {
+        props: { director: { absentAs: { const: "unknown", then: latest } } },
+        default: latest,
+      },
+      fixMovie("MovieRaw"),
+    ),
+    note: "no director deltas exist; the policy names the property so absentAs fires",
+  },
+  {
+    name: "resolve-nested-expansion",
+    spec: "ERRATA-5 R1/R6 (multi-pointer candidate; nested View with same policy)",
+    term: res({ default: latest }, fixMovie("MovieCast")),
+    note: "cast candidate is {actor: {name: Keanu Reeves}, character: Neo}",
+  },
+];
+
+const resolveVectors = resolveCases.map(({ name, spec, term, note }) => {
+  const result = evalTerm(parseTerm(term), resolveFixtureSet, undefined, resolveRegistry);
+  if (result.sort !== "view") throw new Error(`${name}: expected a View result`);
+  return {
+    name,
+    spec,
+    ...(note === undefined ? {} : { note }),
+    term,
+    expectedView: result.view,
+    expectedCanonicalHex: resultCanonicalHex(result),
+  };
+});
+
+const resolveOut = {
+  fixture: {
+    note: "superposed titles, competing ratings, mixed-type sizes, a negation, and a cast edge for nested resolution",
+    deltas: Object.entries(rfx).map(([name, f]) => ({ name, id: f.id, claims: f.claims })),
+  },
+  schemas: resolveSchemas,
+  cases: resolveVectors,
+};
+writeFileSync(resolve(evalDir, "eval-resolve.json"), `${JSON.stringify(resolveOut, null, 2)}\n`);
+console.log(
+  `wrote ${resolveVectors.length} resolve vectors over ${resolveFixtureSet.size} fixture deltas to vectors/l1-eval/eval-resolve.json`,
+);
+
 // the fixture ids double as documentation: surface two for sanity
 console.log(
   `  d2=${idOf("d2-title-reloaded").slice(0, 12)}… d4=${idOf("d4-negates-d2").slice(0, 12)}…`,

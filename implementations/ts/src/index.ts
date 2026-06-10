@@ -38,4 +38,13 @@ export {
 } from "./eval.js";
 export { hviewCanonicalHex, type HVEntry, type HView } from "./hview.js";
 export { SchemaRegistry, collectRefs, type HyperSchema } from "./schema.js";
-export { parsePred, parseTerm } from "./term-json.js";
+export {
+  resolveView,
+  viewCanonicalHex,
+  type MergeFn,
+  type Order,
+  type Policy,
+  type PropPolicy,
+  type View,
+} from "./policy.js";
+export { parsePolicy, parsePred, parseTerm } from "./term-json.js";

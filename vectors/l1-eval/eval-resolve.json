@@ -1,0 +1,833 @@
+{
+  "fixture": {
+    "note": "superposed titles, competing ratings, mixed-type sizes, a negation, and a cast edge for nested resolution",
+    "deltas": [
+      {
+        "name": "t1-title-a",
+        "id": "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392",
+        "claims": {
+          "timestamp": 100,
+          "author": "did:key:zAlice",
+          "pointers": [
+            {
+              "role": "subject",
+              "target": {
+                "entityRef": {
+                  "id": "movie:matrix",
+                  "context": "title"
+                }
+              }
+            },
+            {
+              "role": "value",
+              "target": {
+                "value": "The Matrix"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "t2-title-b",
+        "id": "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744",
+        "claims": {
+          "timestamp": 200,
+          "author": "did:key:zBob",
+          "pointers": [
+            {
+              "role": "subject",
+              "target": {
+                "entityRef": {
+                  "id": "movie:matrix",
+                  "context": "title"
+                }
+              }
+            },
+            {
+              "role": "value",
+              "target": {
+                "value": "Matrix Reloaded"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "y1-year",
+        "id": "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+        "claims": {
+          "timestamp": 150,
+          "author": "did:key:zAlice",
+          "pointers": [
+            {
+              "role": "subject",
+              "target": {
+                "entityRef": {
+                  "id": "movie:matrix",
+                  "context": "releaseYear"
+                }
+              }
+            },
+            {
+              "role": "value",
+              "target": {
+                "value": 1999
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "r1-rating-a",
+        "id": "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f",
+        "claims": {
+          "timestamp": 500,
+          "author": "did:key:zAlice",
+          "pointers": [
+            {
+              "role": "subject",
+              "target": {
+                "entityRef": {
+                  "id": "movie:matrix",
+                  "context": "rating"
+                }
+              }
+            },
+            {
+              "role": "value",
+              "target": {
+                "value": 8.7
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "r2-rating-b",
+        "id": "1e2020389ed306335a0a3462af525c34b9db4bd79d79d91f61fbfcddc0af0ec1aa2d",
+        "claims": {
+          "timestamp": 600,
+          "author": "did:key:zBob",
+          "pointers": [
+            {
+              "role": "subject",
+              "target": {
+                "entityRef": {
+                  "id": "movie:matrix",
+                  "context": "rating"
+                }
+              }
+            },
+            {
+              "role": "value",
+              "target": {
+                "value": 9.1
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "g1-tag-scifi",
+        "id": "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8",
+        "claims": {
+          "timestamp": 120,
+          "author": "did:key:zCarol",
+          "pointers": [
+            {
+              "role": "subject",
+              "target": {
+                "entityRef": {
+                  "id": "movie:matrix",
+                  "context": "tag"
+                }
+              }
+            },
+            {
+              "role": "value",
+              "target": {
+                "value": "scifi"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "g2-tag-action",
+        "id": "1e20a75bf8b77f15ec02483c1c86443ccde70d1be01e7a011df22009346c4630975c",
+        "claims": {
+          "timestamp": 610,
+          "author": "did:key:zBob",
+          "pointers": [
+            {
+              "role": "subject",
+              "target": {
+                "entityRef": {
+                  "id": "movie:matrix",
+                  "context": "tag"
+                }
+              }
+            },
+            {
+              "role": "value",
+              "target": {
+                "value": "action"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "s1-size-str",
+        "id": "1e20a22266ce59718d14044c011026779b17e6da1ded148ee7fe01b94ba1931e82cf",
+        "claims": {
+          "timestamp": 700,
+          "author": "did:key:zCarol",
+          "pointers": [
+            {
+              "role": "subject",
+              "target": {
+                "entityRef": {
+                  "id": "movie:matrix",
+                  "context": "size"
+                }
+              }
+            },
+            {
+              "role": "value",
+              "target": {
+                "value": "large"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "s2-size-num",
+        "id": "1e20ae788b814e849a0c8d5c26a5ac260bf85cde7c8802f126168d0c1f72037ef487",
+        "claims": {
+          "timestamp": 710,
+          "author": "did:key:zAlice",
+          "pointers": [
+            {
+              "role": "subject",
+              "target": {
+                "entityRef": {
+                  "id": "movie:matrix",
+                  "context": "size"
+                }
+              }
+            },
+            {
+              "role": "value",
+              "target": {
+                "value": 3
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "n1-negates-t2",
+        "id": "1e204b62bb91e392af6ff668d0d8a974e6df49b722ca265f357740380532ee892c26",
+        "claims": {
+          "timestamp": 300,
+          "author": "did:key:zBob",
+          "pointers": [
+            {
+              "role": "negates",
+              "target": {
+                "deltaRef": {
+                  "delta": "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "a1-keanu-name",
+        "id": "1e20a3819b9abb8b7b3e1bd06687fdf661d8c58496494c3bff907a62138db3983174",
+        "claims": {
+          "timestamp": 110,
+          "author": "did:key:zAlice",
+          "pointers": [
+            {
+              "role": "subject",
+              "target": {
+                "entityRef": {
+                  "id": "actor:keanu",
+                  "context": "name"
+                }
+              }
+            },
+            {
+              "role": "value",
+              "target": {
+                "value": "Keanu Reeves"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "c1-cast",
+        "id": "1e207ea21fff501c626cdb8e592db4162519c89a84feadfbbf5851577e5ef2c04d9d",
+        "claims": {
+          "timestamp": 130,
+          "author": "did:key:zAlice",
+          "pointers": [
+            {
+              "role": "movie",
+              "target": {
+                "entityRef": {
+                  "id": "movie:matrix",
+                  "context": "cast"
+                }
+              }
+            },
+            {
+              "role": "actor",
+              "target": {
+                "entityRef": {
+                  "id": "actor:keanu",
+                  "context": "filmography"
+                }
+              }
+            },
+            {
+              "role": "character",
+              "target": {
+                "value": "Neo"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "schemas": [
+    {
+      "name": "MovieRaw",
+      "alg": 1,
+      "body": {
+        "op": "group",
+        "key": "byTargetContext",
+        "in": {
+          "op": "select",
+          "pred": {
+            "hasPointer": {
+              "targetEntity": {
+                "var": "root"
+              }
+            }
+          },
+          "in": "input"
+        }
+      }
+    },
+    {
+      "name": "MovieView",
+      "alg": 1,
+      "body": {
+        "op": "group",
+        "key": "byTargetContext",
+        "in": {
+          "op": "mask",
+          "policy": "drop",
+          "in": {
+            "op": "select",
+            "pred": {
+              "hasPointer": {
+                "targetEntity": {
+                  "var": "root"
+                }
+              }
+            },
+            "in": "input"
+          }
+        }
+      }
+    },
+    {
+      "name": "ActorNameV",
+      "alg": 1,
+      "body": {
+        "op": "group",
+        "key": "byTargetContext",
+        "in": {
+          "op": "mask",
+          "policy": "drop",
+          "in": {
+            "op": "select",
+            "pred": {
+              "hasPointer": {
+                "targetEntity": {
+                  "var": "root"
+                }
+              }
+            },
+            "in": "input"
+          }
+        }
+      }
+    },
+    {
+      "name": "MovieCast",
+      "alg": 1,
+      "body": {
+        "op": "expand",
+        "role": {
+          "exact": "actor"
+        },
+        "schema": "ActorNameV",
+        "in": {
+          "op": "group",
+          "key": "byTargetContext",
+          "in": {
+            "op": "mask",
+            "policy": "drop",
+            "in": {
+              "op": "select",
+              "pred": {
+                "hasPointer": {
+                  "targetEntity": {
+                    "var": "root"
+                  }
+                }
+              },
+              "in": "input"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "pick-latest-superposed",
+      "spec": "SPEC-5 §3 pick/byTimestamp",
+      "note": "no mask: both titles superposed; last-claim-wins picks Matrix Reloaded; size picks 3 (ts 710)",
+      "term": {
+        "op": "resolve",
+        "policy": {
+          "default": {
+            "pick": {
+              "order": {
+                "byTimestamp": "desc"
+              }
+            }
+          }
+        },
+        "in": {
+          "op": "fix",
+          "schema": "MovieRaw",
+          "entity": "movie:matrix"
+        }
+      },
+      "expectedView": {
+        "title": "Matrix Reloaded",
+        "releaseYear": 1999,
+        "rating": 9.1,
+        "tag": "action",
+        "size": 3,
+        "cast": {
+          "actor": "actor:keanu",
+          "character": "Neo"
+        }
+      },
+      "expectedCanonicalHex": "a66374616766616374696f6e6463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c656f4d61747269782052656c6f6164656466726174696e67fb40223333333333336b72656c6561736559656172f967cf"
+    },
+    {
+      "name": "pick-latest-after-mask-drop",
+      "spec": "SPEC-5 §4 (negation already happened upstream)",
+      "note": "t2 negated by n1: title resolves to The Matrix",
+      "term": {
+        "op": "resolve",
+        "policy": {
+          "default": {
+            "pick": {
+              "order": {
+                "byTimestamp": "desc"
+              }
+            }
+          }
+        },
+        "in": {
+          "op": "fix",
+          "schema": "MovieView",
+          "entity": "movie:matrix"
+        }
+      },
+      "expectedView": {
+        "title": "Matrix Reloaded",
+        "releaseYear": 1999,
+        "rating": 9.1,
+        "tag": "action",
+        "size": 3,
+        "cast": {
+          "actor": "actor:keanu",
+          "character": "Neo"
+        }
+      },
+      "expectedCanonicalHex": "a66374616766616374696f6e6463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c656f4d61747269782052656c6f6164656466726174696e67fb40223333333333336b72656c6561736559656172f967cf"
+    },
+    {
+      "name": "pick-by-author-rank",
+      "spec": "SPEC-5 §3 byAuthorRank (the trust primitive)",
+      "term": {
+        "op": "resolve",
+        "policy": {
+          "default": {
+            "pick": {
+              "order": {
+                "byAuthorRank": [
+                  "did:key:zAlice",
+                  "did:key:zBob",
+                  "did:key:zCarol"
+                ]
+              }
+            }
+          }
+        },
+        "in": {
+          "op": "fix",
+          "schema": "MovieRaw",
+          "entity": "movie:matrix"
+        }
+      },
+      "expectedView": {
+        "title": "The Matrix",
+        "releaseYear": 1999,
+        "rating": 8.7,
+        "tag": "action",
+        "size": 3,
+        "cast": {
+          "actor": "actor:keanu",
+          "character": "Neo"
+        }
+      },
+      "expectedCanonicalHex": "a66374616766616374696f6e6463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c656a546865204d617472697866726174696e67fb40216666666666666b72656c6561736559656172f967cf"
+    },
+    {
+      "name": "pick-by-pred-prefers-carol",
+      "spec": "SPEC-5 §3 byPred",
+      "note": "tag prefers scifi (Carol's), size prefers large (Carol's)",
+      "term": {
+        "op": "resolve",
+        "policy": {
+          "default": {
+            "pick": {
+              "order": {
+                "byPred": {
+                  "pred": {
+                    "match": {
+                      "field": "author",
+                      "cmp": "eq",
+                      "const": "did:key:zCarol"
+                    }
+                  },
+                  "then": {
+                    "byTimestamp": "desc"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "in": {
+          "op": "fix",
+          "schema": "MovieRaw",
+          "entity": "movie:matrix"
+        }
+      },
+      "expectedView": {
+        "title": "Matrix Reloaded",
+        "releaseYear": 1999,
+        "rating": 9.1,
+        "tag": "scifi",
+        "size": "large",
+        "cast": {
+          "actor": "actor:keanu",
+          "character": "Neo"
+        }
+      },
+      "expectedCanonicalHex": "a6637461676573636966696463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65656c61726765657469746c656f4d61747269782052656c6f6164656466726174696e67fb40223333333333336b72656c6561736559656172f967cf"
+    },
+    {
+      "name": "all-ascending",
+      "spec": "SPEC-5 §3 all",
+      "term": {
+        "op": "resolve",
+        "policy": {
+          "props": {
+            "tag": {
+              "all": {
+                "order": {
+                  "byTimestamp": "asc"
+                }
+              }
+            }
+          },
+          "default": {
+            "pick": {
+              "order": {
+                "byTimestamp": "desc"
+              }
+            }
+          }
+        },
+        "in": {
+          "op": "fix",
+          "schema": "MovieRaw",
+          "entity": "movie:matrix"
+        }
+      },
+      "expectedView": {
+        "tag": [
+          "scifi",
+          "action"
+        ],
+        "title": "Matrix Reloaded",
+        "releaseYear": 1999,
+        "rating": 9.1,
+        "size": 3,
+        "cast": {
+          "actor": "actor:keanu",
+          "character": "Neo"
+        }
+      },
+      "expectedCanonicalHex": "a6637461678265736369666966616374696f6e6463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c656f4d61747269782052656c6f6164656466726174696e67fb40223333333333336b72656c6561736559656172f967cf"
+    },
+    {
+      "name": "merge-max-min-sum-count",
+      "spec": "SPEC-5 §3 MergeFn / ERRATA-5 R2",
+      "note": "sum folds in id order (8.7+9.1); size max is the STRING large by canonical type order",
+      "term": {
+        "op": "resolve",
+        "policy": {
+          "props": {
+            "rating": {
+              "merge": "sum"
+            },
+            "tag": {
+              "merge": "count"
+            },
+            "size": {
+              "merge": "max"
+            },
+            "releaseYear": {
+              "merge": "min"
+            }
+          },
+          "default": {
+            "pick": {
+              "order": {
+                "byTimestamp": "desc"
+              }
+            }
+          }
+        },
+        "in": {
+          "op": "fix",
+          "schema": "MovieRaw",
+          "entity": "movie:matrix"
+        }
+      },
+      "expectedView": {
+        "rating": 17.799999999999997,
+        "tag": 2,
+        "size": "large",
+        "releaseYear": 1999,
+        "title": "Matrix Reloaded",
+        "cast": {
+          "actor": "actor:keanu",
+          "character": "Neo"
+        }
+      },
+      "expectedCanonicalHex": "a663746167f940006463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65656c61726765657469746c656f4d61747269782052656c6f6164656466726174696e67fb4031cccccccccccc6b72656c6561736559656172f967cf"
+    },
+    {
+      "name": "merge-concat-sorted",
+      "spec": "SPEC-5 §3 MergeFn",
+      "term": {
+        "op": "resolve",
+        "policy": {
+          "props": {
+            "tag": {
+              "merge": "concatSorted"
+            }
+          },
+          "default": {
+            "pick": {
+              "order": {
+                "byTimestamp": "desc"
+              }
+            }
+          }
+        },
+        "in": {
+          "op": "fix",
+          "schema": "MovieRaw",
+          "entity": "movie:matrix"
+        }
+      },
+      "expectedView": {
+        "tag": [
+          "action",
+          "scifi"
+        ],
+        "title": "Matrix Reloaded",
+        "releaseYear": 1999,
+        "rating": 9.1,
+        "size": 3,
+        "cast": {
+          "actor": "actor:keanu",
+          "character": "Neo"
+        }
+      },
+      "expectedCanonicalHex": "a6637461678266616374696f6e6573636966696463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c656f4d61747269782052656c6f6164656466726174696e67fb40223333333333336b72656c6561736559656172f967cf"
+    },
+    {
+      "name": "conflicts-surfaces-disagreement",
+      "spec": "SPEC-5 §3 conflicts",
+      "note": "title has 2 distinct claims -> surfaced; releaseYear has 1 -> absent",
+      "term": {
+        "op": "resolve",
+        "policy": {
+          "props": {
+            "title": {
+              "conflicts": {
+                "order": {
+                  "byTimestamp": "desc"
+                }
+              }
+            },
+            "releaseYear": {
+              "conflicts": {
+                "order": {
+                  "byTimestamp": "desc"
+                }
+              }
+            }
+          },
+          "default": {
+            "pick": {
+              "order": {
+                "byTimestamp": "desc"
+              }
+            }
+          }
+        },
+        "in": {
+          "op": "fix",
+          "schema": "MovieRaw",
+          "entity": "movie:matrix"
+        }
+      },
+      "expectedView": {
+        "title": [
+          "Matrix Reloaded",
+          "The Matrix"
+        ],
+        "rating": 9.1,
+        "tag": "action",
+        "size": 3,
+        "cast": {
+          "actor": "actor:keanu",
+          "character": "Neo"
+        }
+      },
+      "expectedCanonicalHex": "a56374616766616374696f6e6463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c65826f4d61747269782052656c6f616465646a546865204d617472697866726174696e67fb4022333333333333"
+    },
+    {
+      "name": "absent-as-default",
+      "spec": "SPEC-5 §3 absentAs / §4 empty property",
+      "note": "no director deltas exist; the policy names the property so absentAs fires",
+      "term": {
+        "op": "resolve",
+        "policy": {
+          "props": {
+            "director": {
+              "absentAs": {
+                "const": "unknown",
+                "then": {
+                  "pick": {
+                    "order": {
+                      "byTimestamp": "desc"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "pick": {
+              "order": {
+                "byTimestamp": "desc"
+              }
+            }
+          }
+        },
+        "in": {
+          "op": "fix",
+          "schema": "MovieRaw",
+          "entity": "movie:matrix"
+        }
+      },
+      "expectedView": {
+        "director": "unknown",
+        "title": "Matrix Reloaded",
+        "releaseYear": 1999,
+        "rating": 9.1,
+        "tag": "action",
+        "size": 3,
+        "cast": {
+          "actor": "actor:keanu",
+          "character": "Neo"
+        }
+      },
+      "expectedCanonicalHex": "a76374616766616374696f6e6463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c656f4d61747269782052656c6f6164656466726174696e67fb4022333333333333686469726563746f7267756e6b6e6f776e6b72656c6561736559656172f967cf"
+    },
+    {
+      "name": "resolve-nested-expansion",
+      "spec": "ERRATA-5 R1/R6 (multi-pointer candidate; nested View with same policy)",
+      "note": "cast candidate is {actor: {name: Keanu Reeves}, character: Neo}",
+      "term": {
+        "op": "resolve",
+        "policy": {
+          "default": {
+            "pick": {
+              "order": {
+                "byTimestamp": "desc"
+              }
+            }
+          }
+        },
+        "in": {
+          "op": "fix",
+          "schema": "MovieCast",
+          "entity": "movie:matrix"
+        }
+      },
+      "expectedView": {
+        "title": "Matrix Reloaded",
+        "releaseYear": 1999,
+        "rating": 9.1,
+        "tag": "action",
+        "size": 3,
+        "cast": {
+          "actor": {
+            "name": "Keanu Reeves",
+            "filmography": {
+              "movie": "movie:matrix",
+              "character": "Neo"
+            }
+          },
+          "character": "Neo"
+        }
+      },
+      "expectedCanonicalHex": "a66374616766616374696f6e6463617374a2656163746f72a2646e616d656c4b65616e75205265657665736b66696c6d6f677261706879a2656d6f7669656c6d6f7669653a6d617472697869636861726163746572634e656f69636861726163746572634e656f6473697a65f94200657469746c656f4d61747269782052656c6f6164656466726174696e67fb40223333333333336b72656c6561736559656172f967cf"
+    }
+  ]
+}

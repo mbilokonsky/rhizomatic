@@ -33,7 +33,7 @@ fn fixture_set(doc: &Value) -> DeltaSet {
 fn as_dset(r: EvalResult) -> (DeltaSet, BTreeSet<String>) {
     match r {
         EvalResult::DSet { set, negated, .. } => (set, negated),
-        EvalResult::HView(_) => panic!("expected a DSet result"),
+        _ => panic!("expected a DSet result"),
     }
 }
 

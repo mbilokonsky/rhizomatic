@@ -5,6 +5,7 @@ use serde_json::Value;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::eval::{GroupKey, MaskPolicy, PruneKeep, Term};
+use crate::policy::{MergeFn, Order, Policy, PropPolicy};
 use crate::pred::{Cmp, EntityMatch, Field, MatchConst, PPred, Pred, StrMatch, ValMatch};
 use crate::types::Primitive;
 
@@ -235,6 +236,97 @@ fn parse_mask_policy(raw: &Value) -> Result<MaskPolicy, String> {
     Err("mask policy must be drop | annotate | {trust: Pred}".to_string())
 }
 
+fn parse_order(raw: &Value) -> Result<Order, String> {
+    if raw == "lexById" {
+        return Ok(Order::LexById);
+    }
+    let o = raw.as_object().ok_or("order: expected object")?;
+    if let Some(d) = o.get("byTimestamp") {
+        return match d.as_str() {
+            Some("desc") => Ok(Order::ByTimestamp { desc: true }),
+            Some("asc") => Ok(Order::ByTimestamp { desc: false }),
+            _ => Err("byTimestamp must be desc | asc".to_string()),
+        };
+    }
+    if let Some(arr) = o.get("byAuthorRank").and_then(Value::as_array) {
+        let authors = arr
+            .iter()
+            .map(|a| {
+                a.as_str()
+                    .map(nfc)
+                    .ok_or("byAuthorRank entries must be strings".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(Order::ByAuthorRank(authors));
+    }
+    if let Some(bp) = o.get("byPred") {
+        let po = bp.as_object().ok_or("byPred: expected object")?;
+        return Ok(Order::ByPred {
+            pred: parse_pred(po.get("pred").unwrap_or(&Value::Null))?,
+            then: Box::new(parse_order(po.get("then").unwrap_or(&Value::Null))?),
+        });
+    }
+    Err("order must be lexById | byTimestamp | byAuthorRank | byPred".to_string())
+}
+
+fn parse_prop_policy(raw: &Value) -> Result<PropPolicy, String> {
+    let o = raw.as_object().ok_or("propPolicy: expected object")?;
+    if let Some(p) = o.get("pick") {
+        let po = p.as_object().ok_or("pick: expected object")?;
+        return Ok(PropPolicy::Pick(parse_order(
+            po.get("order").unwrap_or(&Value::Null),
+        )?));
+    }
+    if let Some(p) = o.get("all") {
+        let po = p.as_object().ok_or("all: expected object")?;
+        return Ok(PropPolicy::All(parse_order(
+            po.get("order").unwrap_or(&Value::Null),
+        )?));
+    }
+    if let Some(m) = o.get("merge") {
+        let fn_ = match m.as_str() {
+            Some("max") => MergeFn::Max,
+            Some("min") => MergeFn::Min,
+            Some("sum") => MergeFn::Sum,
+            Some("count") => MergeFn::Count,
+            Some("and") => MergeFn::And,
+            Some("or") => MergeFn::Or,
+            Some("concatSorted") => MergeFn::ConcatSorted,
+            other => return Err(format!("unknown merge fn {other:?}")),
+        };
+        return Ok(PropPolicy::Merge(fn_));
+    }
+    if let Some(c) = o.get("conflicts") {
+        let co = c.as_object().ok_or("conflicts: expected object")?;
+        return Ok(PropPolicy::Conflicts(parse_order(
+            co.get("order").unwrap_or(&Value::Null),
+        )?));
+    }
+    if let Some(a) = o.get("absentAs") {
+        let ao = a.as_object().ok_or("absentAs: expected object")?;
+        return Ok(PropPolicy::AbsentAs {
+            constant: parse_primitive(ao.get("const").unwrap_or(&Value::Null), "absentAs.const")?,
+            then: Box::new(parse_prop_policy(ao.get("then").unwrap_or(&Value::Null))?),
+        });
+    }
+    Err("propPolicy must be pick | all | merge | conflicts | absentAs".to_string())
+}
+
+pub fn parse_policy(raw: &Value) -> Result<Policy, String> {
+    let o = raw.as_object().ok_or("policy: expected object")?;
+    let mut props = std::collections::BTreeMap::new();
+    if let Some(ps) = o.get("props") {
+        let po = ps.as_object().ok_or("policy.props: expected object")?;
+        for (k, v) in po {
+            props.insert(nfc(k), parse_prop_policy(v)?);
+        }
+    }
+    Ok(Policy {
+        props,
+        default: parse_prop_policy(o.get("default").unwrap_or(&Value::Null))?,
+    })
+}
+
 fn parse_group_key(raw: &Value) -> Result<GroupKey, String> {
     if raw == "byTargetContext" {
         return Ok(GroupKey::ByTargetContext);
@@ -297,6 +389,10 @@ pub fn parse_term(raw: &Value) -> Result<Term, String> {
                 entity: nfc(entity),
             })
         }
+        Some("resolve") => Ok(Term::Resolve {
+            policy: parse_policy(o.get("policy").unwrap_or(&Value::Null))?,
+            of: Box::new(parse_term(o.get("in").unwrap_or(&Value::Null))?),
+        }),
         Some("prune") => {
             let keep_raw = o.get("keep").unwrap_or(&Value::Null);
             let keep = if keep_raw == "all" {

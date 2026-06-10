@@ -7,6 +7,7 @@ pub mod eval;
 pub mod hash;
 pub mod hview;
 pub mod json_profile;
+pub mod policy;
 pub mod pred;
 pub mod schema;
 pub mod set;
@@ -19,6 +20,7 @@ pub use eval::{
     eval_term, result_canonical_hex, EvalResult, GroupKey, MaskPolicy, PruneKeep, Term,
 };
 pub use hview::{hview_canonical_hex, HVEntry, HView};
+pub use policy::{resolve_view, view_canonical_hex, MergeFn, Order, Policy, PropPolicy, View};
 pub use pred::{compare_primitives, eval_pred, Pred};
 pub use schema::{collect_refs, HyperSchema, SchemaRegistry};
 pub use set::{federate, fork, make_delta, make_negation_claims, merge, DeltaSet};

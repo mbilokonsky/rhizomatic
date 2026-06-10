@@ -22,7 +22,8 @@ pub fn collect_refs(term: &Term) -> Vec<String> {
             Term::Select { of, .. }
             | Term::Mask { of, .. }
             | Term::Group { of, .. }
-            | Term::Prune { of, .. } => walk(of, out),
+            | Term::Prune { of, .. }
+            | Term::Resolve { of, .. } => walk(of, out),
             Term::Union { left, right } => {
                 walk(left, out);
                 walk(right, out);

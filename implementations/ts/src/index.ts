@@ -62,6 +62,8 @@ export { decode } from "./cbor.js";
 export {
   Reactor,
   isRootAnchored,
+  makeManifestClaims,
+  manifestMemberIds,
   type IngestResult,
   type MaterializationChange,
 } from "./reactor.js";

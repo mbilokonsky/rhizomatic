@@ -110,6 +110,8 @@ describe("incremental equivalence (SPEC-4 §1 — the defining contract)", () =>
       {
         materialization: "deep",
         root: "movie:matrix",
+        changedProps: ["title"],
+        responsibleDeltaIds: [m1.id],
         newHex: r.materializedHex("deep", "movie:matrix"),
       },
     ]);

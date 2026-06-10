@@ -3,18 +3,25 @@
 // M2.2; this layer guarantees idempotence and order-convergence.
 
 import { evalTerm, type EvalResult, type Term } from "./eval.js";
-import { hviewCanonicalHex, type HView } from "./hview.js";
+import { array, encode } from "./cbor.js";
+import { bytesToHex } from "./hash.js";
+import { hvEntryToCbor, hviewCanonicalHex, type HView } from "./hview.js";
 import { collectRefs } from "./schema.js";
 import { comparePrimitives, type Pred, type ValMatch } from "./pred.js";
 import { viewCanonicalHex } from "./policy.js";
 import type { SchemaRegistry } from "./schema.js";
 import { DeltaSet } from "./set.js";
+import { VOCAB_PREFIX } from "./schema-deltas.js";
 import { verifyDelta } from "./sign.js";
 import type { Delta, Primitive } from "./types.js";
 
+// A change event carries: root, affected property paths, responsible delta ids, new content
+// hash (SPEC-4 §5).
 export interface MaterializationChange {
   readonly materialization: string;
   readonly root: string;
+  readonly changedProps: readonly string[];
+  readonly responsibleDeltaIds: readonly string[];
   readonly newHex: string;
 }
 
@@ -26,6 +33,7 @@ interface Materialization {
   readonly rootAnchored: boolean;
   readonly views: Map<string, HView>;
   readonly hexes: Map<string, string>;
+  readonly propHexes: Map<string, Map<string, string>>;
   readonly supportEntities: Map<string, Set<string>>;
   evalCount: number;
 }
@@ -64,7 +72,8 @@ export class Reactor {
     }
     this.log.push(delta);
     this.index(delta);
-    this.lastChanges = this.dispatchAndUpdate(delta);
+    for (const cb of this.rawSubscribers) cb(delta);
+    this.lastChanges = this.dispatchAndUpdate([delta]);
     return { status: "accepted" };
   }
 
@@ -189,10 +198,11 @@ export class Reactor {
       rootAnchored: isRootAnchored(term, registry),
       views: new Map(),
       hexes: new Map(),
+      propHexes: new Map(),
       supportEntities: new Map(),
       evalCount: 0,
     };
-    for (const root of mat.roots) this.refresh(mat, root);
+    for (const root of mat.roots) void this.refresh(mat, root);
     this.materializations.set(name, mat);
   }
 
@@ -212,30 +222,46 @@ export class Reactor {
     return this.lastChanges;
   }
 
-  private refresh(mat: Materialization, root: string): boolean {
+  private refresh(mat: Materialization, root: string): string[] | undefined {
     const result = evalTerm(mat.term, this.set, root, mat.registry);
     if (result.sort !== "hview") throw new Error("materialized terms must be HView-sort");
     mat.evalCount += 1;
     const hex = hviewCanonicalHex(result.hview);
     const changed = mat.hexes.get(root) !== hex;
+    const newPropHexes = propHexesOf(result.hview);
+    const changedProps = changed
+      ? diffProps(mat.propHexes.get(root) ?? new Map(), newPropHexes)
+      : undefined;
     mat.views.set(root, result.hview);
     mat.hexes.set(root, hex);
+    mat.propHexes.set(root, newPropHexes);
     const entities = new Set<string>([root]);
     collectNestedIds(result.hview, entities);
     mat.supportEntities.set(root, entities);
-    return changed;
+    return changedProps;
   }
 
   // Sound dispatch (V5): over-match allowed, under-match forbidden.
-  private dispatchAndUpdate(delta: Delta): MaterializationChange[] {
+  private dispatchAndUpdate(deltas: readonly Delta[]): MaterializationChange[] {
+    const responsible = deltas.map((d) => d.id);
     const changes: MaterializationChange[] = [];
     for (const mat of this.materializations.values()) {
       for (const root of mat.roots) {
-        if (!this.affects(delta, mat, root)) continue;
-        if (this.refresh(mat, root)) {
-          changes.push({ materialization: mat.name, root, newHex: mat.hexes.get(root)! });
+        if (!deltas.some((d) => this.affects(d, mat, root))) continue;
+        const changedProps = this.refresh(mat, root);
+        if (changedProps !== undefined) {
+          changes.push({
+            materialization: mat.name,
+            root,
+            changedProps,
+            responsibleDeltaIds: responsible,
+            newHex: mat.hexes.get(root)!,
+          });
         }
       }
+    }
+    for (const c of changes) {
+      for (const cb of this.matSubscribers.get(c.materialization) ?? []) cb(c);
     }
     return changes;
   }
@@ -269,6 +295,119 @@ export class Reactor {
     }
     return false;
   }
+
+  // --- subscriptions (SPEC-4 §5) ---
+
+  private readonly rawSubscribers: Array<(d: Delta) => void> = [];
+  private readonly matSubscribers = new Map<string, Array<(c: MaterializationChange) => void>>();
+
+  // The raw stream: every accepted delta (federation relays, audit, mirrors).
+  subscribeRaw(cb: (delta: Delta) => void): void {
+    this.rawSubscribers.push(cb);
+  }
+
+  // Change events on a registered materialization's HyperViews.
+  subscribe(materialization: string, cb: (change: MaterializationChange) => void): void {
+    const list = this.matSubscribers.get(materialization);
+    if (list === undefined) this.matSubscribers.set(materialization, [cb]);
+    else list.push(cb);
+  }
+
+  // --- atomic batch ingestion (SPEC-1 §9, SPEC-4 §6) ---
+
+  // Manifest-keyed atomic ingestion: validate everything first; all members become visible to
+  // dispatch in one step, or none do. The transaction vocabulary supplies the batch boundary;
+  // the reactor supplies the courtesy.
+  ingestBundle(manifest: Delta, members: readonly Delta[]): IngestResult {
+    const fresh = [...members, manifest].filter((d) => !this.set.has(d.id));
+    // Validate all before admitting any (atomic acceptance).
+    for (const d of fresh) {
+      if (d.sig !== undefined && verifyDelta(d) !== "verified") {
+        return { status: "rejected", reason: `bundle member ${d.id}: signature does not verify` };
+      }
+      try {
+        const probe = new DeltaSet();
+        probe.add(d);
+      } catch (e) {
+        return {
+          status: "rejected",
+          reason: `bundle member ${d.id}: ${e instanceof Error ? e.message : String(e)}`,
+        };
+      }
+    }
+    // The manifest must commit to every supplied member by content address (SPEC-1 §9).
+    const committed = new Set(manifestMemberIds(manifest));
+    for (const m of members) {
+      if (!committed.has(m.id)) {
+        return { status: "rejected", reason: `member ${m.id} is not claimed by the manifest` };
+      }
+    }
+    if (fresh.length === 0) return { status: "duplicate" };
+    for (const d of fresh) {
+      this.set.add(d);
+      this.log.push(d);
+      this.index(d);
+      for (const cb of this.rawSubscribers) cb(d);
+    }
+    this.lastChanges = this.dispatchAndUpdate(fresh);
+    return { status: "accepted" };
+  }
+
+  // Completeness is verifiable, not enforced (SPEC-1 §9): a hash check.
+  holdsAllMembers(manifestId: string): boolean {
+    const manifest = this.set.get(manifestId);
+    if (manifest === undefined) return false;
+    return manifestMemberIds(manifest).every((id) => this.set.has(id));
+  }
+}
+
+// --- the rdb.txn vocabulary (SPEC-1 §9) ---
+
+export function makeManifestClaims(
+  author: string,
+  timestamp: number,
+  memberIds: readonly string[],
+  options?: { readonly prior?: string; readonly intent?: string },
+): import("./types.js").Claims {
+  const pointers: import("./types.js").Pointer[] = memberIds.map((id) => ({
+    role: `${VOCAB_PREFIX}.txn.member`,
+    target: { kind: "delta", deltaRef: { delta: id } },
+  }));
+  if (options?.prior !== undefined) {
+    pointers.push({
+      role: `${VOCAB_PREFIX}.txn.prior`,
+      target: { kind: "delta", deltaRef: { delta: options.prior } },
+    });
+  }
+  if (options?.intent !== undefined) {
+    pointers.push({
+      role: `${VOCAB_PREFIX}.txn.intent`,
+      target: { kind: "primitive", value: options.intent },
+    });
+  }
+  return { timestamp, author, pointers };
+}
+
+export function manifestMemberIds(manifest: Delta): string[] {
+  return manifest.claims.pointers
+    .filter((p) => p.role === `${VOCAB_PREFIX}.txn.member` && p.target.kind === "delta")
+    .map((p) => (p.target as { deltaRef: { delta: string } }).deltaRef.delta);
+}
+
+// Per-property canonical hexes, for change-path diffing (SPEC-4 §5).
+function propHexesOf(h: HView): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [prop, entries] of h.props) {
+    out.set(prop, bytesToHex(encode(array(entries.map(hvEntryToCbor)))));
+  }
+  return out;
+}
+
+function diffProps(before: Map<string, string>, after: Map<string, string>): string[] {
+  const changed = new Set<string>();
+  for (const [prop, hex] of after) if (before.get(prop) !== hex) changed.add(prop);
+  for (const prop of before.keys()) if (!after.has(prop)) changed.add(prop);
+  return [...changed].sort();
 }
 
 // Collect every nested (expanded) HView id, recursively — the support-entity set (V5).

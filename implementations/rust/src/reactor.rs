@@ -60,7 +60,7 @@ impl Reactor {
             Err(e) => return IngestResult::Rejected(e),
         }
         self.index(&delta);
-        self.last_changes = self.dispatch_and_update(&delta);
+        self.last_changes = self.dispatch_and_update(std::slice::from_ref(&delta));
         self.log.push(delta);
         IngestResult::Accepted
     }
@@ -220,29 +220,32 @@ impl Reactor {
         &self.last_changes
     }
 
-    fn dispatch_and_update(&mut self, delta: &Delta) -> Vec<MaterializationChange> {
+    fn dispatch_and_update(&mut self, deltas: &[Delta]) -> Vec<MaterializationChange> {
         // Split borrows: materializations is mutated while the set is read.
         let Self {
             set,
             materializations,
             ..
         } = self;
+        let responsible: Vec<String> = deltas.iter().map(|d| d.id.clone()).collect();
         let mut changes = Vec::new();
         for mat in materializations.values_mut() {
             let affected: Vec<String> = mat
                 .roots
                 .iter()
-                .filter(|root| mat_affects(mat, delta, root, set))
+                .filter(|root| deltas.iter().any(|d| mat_affects(mat, d, root, set)))
                 .cloned()
                 .collect();
             for root in affected {
-                if mat
+                if let Some(changed_props) = mat
                     .refresh(set, &root)
                     .expect("registered terms stay evaluable")
                 {
                     changes.push(MaterializationChange {
                         materialization: mat.name.clone(),
                         root: root.clone(),
+                        changed_props,
+                        responsible_delta_ids: responsible.clone(),
                         new_hex: mat.hexes.get(&root).unwrap().clone(),
                     });
                 }
@@ -250,4 +253,120 @@ impl Reactor {
         }
         changes
     }
+
+    // --- atomic batch ingestion (SPEC-1 §9, SPEC-4 §6) ---
+
+    /// Manifest-keyed atomic ingestion: validate everything first; all members become visible to
+    /// dispatch in one step, or none do.
+    pub fn ingest_bundle(&mut self, manifest: Delta, members: &[Delta]) -> IngestResult {
+        let mut fresh: Vec<Delta> = Vec::new();
+        for d in members.iter().chain(std::iter::once(&manifest)) {
+            if self.set.contains(&d.id) {
+                continue;
+            }
+            if d.sig.is_some() && verify_delta(d) != Verification::Verified {
+                return IngestResult::Rejected(format!(
+                    "bundle member {}: signature does not verify",
+                    d.id
+                ));
+            }
+            let mut probe = DeltaSet::new();
+            if let Err(e) = probe.add(d.clone()) {
+                return IngestResult::Rejected(format!("bundle member {}: {e}", d.id));
+            }
+            fresh.push(d.clone());
+        }
+        // The manifest must commit to every supplied member by content address (SPEC-1 §9).
+        let committed = manifest_member_ids(&manifest);
+        for m in members {
+            if !committed.contains(&m.id) {
+                return IngestResult::Rejected(format!(
+                    "member {} is not claimed by the manifest",
+                    m.id
+                ));
+            }
+        }
+        if fresh.is_empty() {
+            return IngestResult::Duplicate;
+        }
+        for d in &fresh {
+            self.set.add(d.clone()).expect("validated above");
+            self.index(d);
+            self.log.push(d.clone());
+        }
+        self.last_changes = self.dispatch_and_update(&fresh);
+        IngestResult::Accepted
+    }
+
+    /// Completeness is verifiable, not enforced (SPEC-1 §9): a hash check.
+    pub fn holds_all_members(&self, manifest_id: &str) -> bool {
+        let Some(manifest) = self.set.get(manifest_id) else {
+            return false;
+        };
+        manifest_member_ids(manifest)
+            .iter()
+            .all(|id| self.set.contains(id))
+    }
+}
+
+// --- the rdb.txn vocabulary (SPEC-1 §9) ---
+
+use crate::schema_deltas::VOCAB_PREFIX;
+use crate::types::{Claims, DeltaRef, Pointer};
+
+pub fn make_manifest_claims(
+    author: &str,
+    timestamp: f64,
+    member_ids: &[String],
+    prior: Option<&str>,
+    intent: Option<&str>,
+) -> Claims {
+    let mut pointers: Vec<Pointer> = member_ids
+        .iter()
+        .map(|id| Pointer {
+            role: format!("{VOCAB_PREFIX}.txn.member"),
+            target: Target::Delta(DeltaRef {
+                delta: id.clone(),
+                context: None,
+            }),
+        })
+        .collect();
+    if let Some(p) = prior {
+        pointers.push(Pointer {
+            role: format!("{VOCAB_PREFIX}.txn.prior"),
+            target: Target::Delta(DeltaRef {
+                delta: p.to_string(),
+                context: None,
+            }),
+        });
+    }
+    if let Some(i) = intent {
+        pointers.push(Pointer {
+            role: format!("{VOCAB_PREFIX}.txn.intent"),
+            target: Target::Primitive(crate::types::Primitive::Str(i.to_string())),
+        });
+    }
+    Claims {
+        timestamp,
+        author: author.to_string(),
+        pointers,
+    }
+}
+
+pub fn manifest_member_ids(manifest: &Delta) -> Vec<String> {
+    let member_role = format!("{VOCAB_PREFIX}.txn.member");
+    manifest
+        .claims
+        .pointers
+        .iter()
+        .filter_map(|p| {
+            if p.role != member_role {
+                return None;
+            }
+            match &p.target {
+                Target::Delta(dr) => Some(dr.delta.clone()),
+                _ => None,
+            }
+        })
+        .collect()
 }

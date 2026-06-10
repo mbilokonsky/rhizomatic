@@ -18,8 +18,8 @@ window should be able to read this top-to-bottom and know exactly where things s
 |---|---|---|---|
 | M0 | The atom (canonical form, id, signatures, set-ops) | ✅ complete | ✅ complete |
 | M1 | The evaluator (8 operators, schema bootstrap) | ✅ complete | ✅ complete |
-| M2 | The reactor | next | next |
-| M3 | Packs | — | — |
+| M2 | The reactor | ✅ complete | ✅ complete |
+| M3 | Packs | next | next |
 | M4 | Federation | — | — |
 | M5 | Derivation | — | — |
 
@@ -85,9 +85,14 @@ incremental result must be byte-identical to from-scratch eval (SPEC-4 §1).
   ingest under random permutations in both witnesses (fast-check / seeded proptest), incl. the
   suppress→reinstate cycle and expanded-entity re-materialization; anchored dispatch provably
   skips irrelevant deltas (eval-count assertion); change events fire only on content change.
-- **M2.3 — subscriptions + change events.** root entity, affected property paths, responsible
-  delta ids, new content hash (SPEC-4 §5); read-your-writes confirmation (§6).
-- **M2.4 — manifest-keyed atomic batch ingestion** (rdb.txn vocabulary, SPEC-1 §9 / SPEC-4 §6).
+- **M2.3 — subscriptions + change events.** ✅ **complete.** Change events carry root, changed
+  property paths (per-prop canonical-hex diff), responsible delta ids, new content hash (SPEC-4
+  §5). TS: push callbacks (raw stream + per-materialization); Rust: pull-based change log — same
+  content, transport out of scope.
+- **M2.4 — manifest-keyed atomic batch ingestion.** ✅ **complete — M2 done.** rdb.txn vocabulary
+  (member/prior/intent); ingestBundle validates everything first (atomic acceptance, no trace on
+  reject, manifest-commitment check), makes all members visible to dispatch in ONE step (single
+  change event per bundle); holdsAllMembers = the verifiable completeness hash check.
 
 ## Slice log
 

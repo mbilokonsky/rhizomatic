@@ -3,16 +3,11 @@
 // to different truths under different policies, at any point in claimed time.
 // All semantics come from the tested library; this file is DOM glue only.
 
-import {
-  Peer,
-  makeNegationClaims,
-  parsePolicy,
-  parseTerm,
-  resolveView,
-  type HView,
-  type Policy,
-  type View,
-} from "../../src/index.js";
+import { resolveView, type Policy, type View } from "../../src/policy.js";
+import { type HView } from "../../src/hview.js";
+import { Peer } from "../../src/peer.js";
+import { makeNegationClaims } from "../../src/set.js";
+import { parsePolicy, parseTerm } from "../../src/term-json.js";
 
 // --- world state ------------------------------------------------------------------------------
 

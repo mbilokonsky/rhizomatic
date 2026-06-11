@@ -3,13 +3,28 @@
 // This file is DOM glue only; all semantics come from src/.
 
 import { canonicalHex, computeId } from "../../src/delta.js";
+import { evalTerm, resultCanonicalHex } from "../../src/eval.js";
 import type { HView } from "../../src/hview.js";
+import { parseClaims } from "../../src/json-profile.js";
 import { Peer, syncBoth } from "../../src/peer.js";
 import { resolveView, type Policy, type View } from "../../src/policy.js";
 import { Reactor } from "../../src/reactor.js";
-import { makeNegationClaims } from "../../src/set.js";
+import { SchemaRegistry } from "../../src/schema.js";
+import { DeltaSet, makeDelta, makeNegationClaims } from "../../src/set.js";
+import { publicKeyFromSeed, signClaims, verifyDelta } from "../../src/sign.js";
 import { parsePolicy, parseTerm } from "../../src/term-json.js";
 import type { Claims, Delta } from "../../src/types.js";
+
+// The committed conformance vectors, bundled in at build time. CI's docs-freshness gate
+// rebuilds this bundle, so the page can never drift from the vectors the witnesses pass.
+import keysJson from "../../../../vectors/keys/keys.json" with { type: "json" };
+import deltasJson from "../../../../vectors/l0-delta/deltas.json" with { type: "json" };
+import signedJson from "../../../../vectors/l0-delta/deltas-signed.json" with { type: "json" };
+import setDigestJson from "../../../../vectors/l0-delta/set-digest.json" with { type: "json" };
+import evalBasicJson from "../../../../vectors/l1-eval/eval-basic.json" with { type: "json" };
+import evalHviewJson from "../../../../vectors/l1-eval/eval-hview.json" with { type: "json" };
+import evalExpandJson from "../../../../vectors/l1-eval/eval-expand.json" with { type: "json" };
+import evalResolveJson from "../../../../vectors/l1-eval/eval-resolve.json" with { type: "json" };
 
 // --- DOM helpers --------------------------------------------------------------------------------
 
@@ -537,6 +552,211 @@ function widgetReplay(): void {
   };
 }
 
+// --- §6 run the conformance vectors in the browser ------------------------------------------------
+
+interface VecCase {
+  readonly name: string;
+  readonly pass: boolean;
+}
+
+interface Suite {
+  readonly label: string;
+  readonly file: string;
+  readonly cases: VecCase[];
+}
+
+interface DeltaVector {
+  name: string;
+  claims: unknown;
+  canonicalCborHex: string;
+  id: string;
+}
+
+interface SignedVector extends DeltaVector {
+  keyId: string;
+  sig: string;
+}
+
+interface KeyVector {
+  keyId: string;
+  seedHex: string;
+  publicKeyHex: string;
+  author: string;
+}
+
+interface EvalDoc {
+  fixture: { deltas: Array<{ name: string; id: string; claims: unknown }> };
+  schemas?: Array<{ name: string; alg: number; body: unknown }>;
+  cases: Array<{ name: string; root?: string; term: unknown; expectedCanonicalHex: string }>;
+}
+
+const tryCase = (name: string, check: () => boolean): VecCase => {
+  try {
+    return { name, pass: check() };
+  } catch {
+    return { name, pass: false };
+  }
+};
+
+function evalSuite(label: string, file: string, doc: EvalDoc): Suite {
+  const set = DeltaSet.from(doc.fixture.deltas.map((d) => makeDelta(parseClaims(d.claims))));
+  const registry =
+    doc.schemas === undefined
+      ? undefined
+      : SchemaRegistry.build(
+          doc.schemas.map((s) => ({ name: s.name, alg: s.alg, body: parseTerm(s.body) })),
+        );
+  const cases: VecCase[] = [
+    tryCase("fixture ids are pinned", () =>
+      doc.fixture.deltas.every((d) => makeDelta(parseClaims(d.claims)).id === d.id),
+    ),
+    ...doc.cases.map((c) =>
+      tryCase(c.name, () => {
+        const result = evalTerm(parseTerm(c.term), set, c.root, registry);
+        return resultCanonicalHex(result) === c.expectedCanonicalHex;
+      }),
+    ),
+  ];
+  return { label, file, cases };
+}
+
+function runConformance(): Suite[] {
+  const keys = keysJson as unknown as KeyVector[];
+  const deltas = deltasJson as unknown as DeltaVector[];
+  const signed = signedJson as unknown as SignedVector[];
+  const setDigest = setDigestJson as unknown as { ids: string[]; digest: string };
+  return [
+    {
+      label: "canonical CBOR bytes + content addresses",
+      file: "vectors/l0-delta/deltas.json",
+      cases: deltas.map((v) =>
+        tryCase(v.name, () => {
+          const claims = parseClaims(v.claims);
+          return canonicalHex(claims) === v.canonicalCborHex && computeId(claims) === v.id;
+        }),
+      ),
+    },
+    {
+      label: "Ed25519 keys derive from pinned seeds",
+      file: "vectors/keys/keys.json",
+      cases: keys.map((k) =>
+        tryCase(k.keyId, () => {
+          return (
+            publicKeyFromSeed(k.seedHex) === k.publicKeyHex &&
+            k.author === `ed25519:${k.publicKeyHex}`
+          );
+        }),
+      ),
+    },
+    {
+      label: "deterministic signatures, verification, tamper-rejection",
+      file: "vectors/l0-delta/deltas-signed.json",
+      cases: signed.map((v) =>
+        tryCase(v.name, () => {
+          const key = keys.find((k) => k.keyId === v.keyId);
+          if (key === undefined) return false;
+          const claims = parseClaims(v.claims);
+          const resigned = signClaims(claims, key.seedHex);
+          const tampered = verifyDelta({
+            id: resigned.id,
+            claims: { ...claims, timestamp: claims.timestamp + 1 },
+            sig: resigned.sig ?? "",
+          });
+          return (
+            canonicalHex(claims) === v.canonicalCborHex &&
+            computeId(claims) === v.id &&
+            resigned.sig === v.sig &&
+            verifyDelta(resigned) === "verified" &&
+            tampered === "invalid"
+          );
+        }),
+      ),
+    },
+    {
+      label: "delta-set digest (order-independent)",
+      file: "vectors/l0-delta/set-digest.json",
+      cases: [
+        tryCase("set of all deltas.json vectors", () => {
+          const s = DeltaSet.from(deltas.map((v) => makeDelta(parseClaims(v.claims))));
+          return (
+            JSON.stringify(s.ids()) === JSON.stringify(setDigest.ids) &&
+            s.digest() === setDigest.digest
+          );
+        }),
+      ],
+    },
+    evalSuite(
+      "evaluator: select / union / mask",
+      "vectors/l1-eval/eval-basic.json",
+      evalBasicJson as unknown as EvalDoc,
+    ),
+    evalSuite(
+      "evaluator: group / prune (HyperViews)",
+      "vectors/l1-eval/eval-hview.json",
+      evalHviewJson as unknown as EvalDoc,
+    ),
+    evalSuite(
+      "evaluator: expand / fix (schemas)",
+      "vectors/l1-eval/eval-expand.json",
+      evalExpandJson as unknown as EvalDoc,
+    ),
+    evalSuite(
+      "evaluator: resolve (policies → Views)",
+      "vectors/l1-eval/eval-resolve.json",
+      evalResolveJson as unknown as EvalDoc,
+    ),
+  ];
+}
+
+function widgetConformance(): void {
+  const host = $("w-conformance");
+  const btn = el("button", { class: "big" }, "▶ re-run the vectors");
+  const out = el("div", { class: "suites" });
+  const run = (): void => {
+    const t0 = performance.now();
+    const suites = runConformance();
+    const ms = Math.max(1, Math.round(performance.now() - t0));
+    out.replaceChildren();
+    let pass = 0;
+    let total = 0;
+    for (const s of suites) {
+      const ok = s.cases.filter((c) => c.pass).length;
+      pass += ok;
+      total += s.cases.length;
+      const row = el(
+        "div",
+        { class: "entry" },
+        el(
+          "span",
+          { class: ok === s.cases.length ? "val" : "error" },
+          ok === s.cases.length ? "✓ " : "✗ ",
+        ),
+        `${s.label} — ${ok}/${s.cases.length} `,
+        el("span", { class: "meta mono" }, s.file),
+      );
+      if (ok !== s.cases.length) {
+        for (const c of s.cases.filter((x) => !x.pass)) {
+          row.append(el("div", { class: "error" }, `  ✗ ${c.name}`));
+        }
+      }
+      out.append(row);
+    }
+    out.append(
+      el(
+        "div",
+        { class: pass === total ? "ok" : "error", style: "margin-top:0.8em" },
+        pass === total
+          ? `✓ ${pass}/${total} green in ${ms} ms — your browser is now a conformance witness.`
+          : `✗ ${pass}/${total} — a vector failed; this page is out of sync with the suite.`,
+      ),
+    );
+    flash(out);
+  };
+  btn.onclick = run;
+  host.append(out, btn);
+  run();
+}
+
 // --- stats badge ----------------------------------------------------------------------------------
 
 function renderStats(): void {
@@ -552,4 +772,5 @@ widgetSuperposition();
 widgetHistory();
 widgetFederation();
 widgetReplay();
+widgetConformance();
 refreshWorldA();

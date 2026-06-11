@@ -182,6 +182,12 @@ plus polish (README status update, top-level parity runner, CI).
   (both witnesses agree); supported audit idiom is group(mask(annotate,…)) directly, since
   group's E6 filing already scopes to the root. Tour AND playground terms fixed accordingly;
   open question filed for v1 (should channels thread through set-preserving operators?).
+- **The in-browser conformance run** ✅ — §6 of the tour now bundles the committed vector
+  files (l0-delta deltas/signed/set-digest, keys, all four l1-eval suites) via build-time JSON
+  imports and runs them live: 62/62 green in ~60 ms, with per-suite rows, a tamper-rejection
+  check (flip a timestamp → signature verification must fail), and a re-run button. "Your
+  browser is now a conformance witness." CI's docs-freshness gate means the page can never
+  drift from the vectors. Mobile pass done (375px: no overflow, grids collapse).
 - **GitHub Pages** — blocked on a permission: needs the human to enable Pages (main, /docs)
   in repo settings; README already points at https://mbilokonsky.github.io/rhizomatic/.
 

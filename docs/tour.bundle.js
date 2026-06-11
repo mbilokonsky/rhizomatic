@@ -1219,6 +1219,10 @@
   }
 
   // src/set.ts
+  function makeDelta(claims, sig) {
+    const id = computeId(claims);
+    return sig === void 0 ? { id, claims } : { id, claims, sig };
+  }
   function makeNegationClaims(author, timestamp, targetDeltaId, reason) {
     const pointers = [
       { role: "negates", target: { kind: "delta", deltaRef: { delta: targetDeltaId } } }
@@ -1439,6 +1443,220 @@
     }
     return result.hview;
   }
+  function resultCanonicalHex(result) {
+    if (result.sort === "view") return viewCanonicalHex(result.view);
+    if (result.sort === "hview") return hviewCanonicalHex(result.hview);
+    const ids = result.set.ids().map(tstr);
+    if (!result.annotated) return bytesToHex(encode(array(ids)));
+    const negated = [...result.negated].sort().map(tstr);
+    return bytesToHex(
+      encode(
+        map([
+          ["ids", array(ids)],
+          ["negated", array(negated)]
+        ])
+      )
+    );
+  }
+
+  // src/json-profile.ts
+  function asObject(x, what) {
+    if (typeof x !== "object" || x === null || Array.isArray(x)) {
+      throw new Error(`expected object for ${what}`);
+    }
+    return x;
+  }
+  function parsePrimitive(v) {
+    if (typeof v === "string" || typeof v === "boolean") return v;
+    if (typeof v === "number") {
+      if (!Number.isFinite(v)) throw new Error("numeric primitive must be finite");
+      return v;
+    }
+    throw new Error("primitive must be string | number | boolean");
+  }
+  function parseTarget(raw) {
+    const o = asObject(raw, "target");
+    if ("value" in o) return { kind: "primitive", value: parsePrimitive(o["value"]) };
+    if ("entityRef" in o) {
+      const e = asObject(o["entityRef"], "entityRef");
+      const id = e["id"];
+      if (typeof id !== "string") throw new Error("entityRef.id must be a string");
+      const context = e["context"];
+      return context === void 0 ? { kind: "entity", entity: { id } } : { kind: "entity", entity: { id, context: String(context) } };
+    }
+    if ("deltaRef" in o) {
+      const d = asObject(o["deltaRef"], "deltaRef");
+      const delta = d["delta"];
+      if (typeof delta !== "string") throw new Error("deltaRef.delta must be a string");
+      const context = d["context"];
+      return context === void 0 ? { kind: "delta", deltaRef: { delta } } : { kind: "delta", deltaRef: { delta, context: String(context) } };
+    }
+    throw new Error("target must be one of value | entityRef | deltaRef");
+  }
+  function parsePointer(raw) {
+    const o = asObject(raw, "pointer");
+    if (typeof o["role"] !== "string") throw new Error("pointer.role must be a string");
+    return { role: o["role"], target: parseTarget(o["target"]) };
+  }
+  function parseClaims(raw) {
+    const o = asObject(raw, "claims");
+    if (typeof o["timestamp"] !== "number") throw new Error("claims.timestamp must be a number");
+    if (typeof o["author"] !== "string") throw new Error("claims.author must be a string");
+    if (!Array.isArray(o["pointers"])) throw new Error("claims.pointers must be an array");
+    return {
+      timestamp: o["timestamp"],
+      author: o["author"],
+      pointers: o["pointers"].map(parsePointer)
+    };
+  }
+
+  // src/term-io.ts
+  function strMatchToJson(m) {
+    switch (m.kind) {
+      case "exact":
+        return { exact: m.value };
+      case "prefix":
+        return { prefix: m.value };
+      case "inSet":
+        return { inSet: [...m.values] };
+    }
+  }
+  function valMatchToJson(m) {
+    switch (m.kind) {
+      case "vcmp":
+        return { vcmp: { cmp: m.cmp, value: m.value } };
+      case "between":
+        return { between: [m.lo, m.hi] };
+      case "inSet":
+        return { inSet: [...m.values] };
+    }
+  }
+  function ppredToJson(p) {
+    const out = {};
+    if (p.role !== void 0) out["role"] = strMatchToJson(p.role);
+    if (p.targetEntity !== void 0) {
+      out["targetEntity"] = p.targetEntity.kind === "const" ? p.targetEntity.id : { var: "root" };
+    }
+    if (p.targetDelta !== void 0) out["targetDelta"] = p.targetDelta;
+    if (p.context !== void 0) out["context"] = strMatchToJson(p.context);
+    if (p.targetIsPrimitive !== void 0) out["targetIsPrimitive"] = p.targetIsPrimitive;
+    if (p.targetValue !== void 0) out["targetValue"] = valMatchToJson(p.targetValue);
+    return out;
+  }
+  function predToJson(pred) {
+    switch (pred.kind) {
+      case "true":
+        return "true";
+      case "false":
+        return "false";
+      case "match":
+        return {
+          match: {
+            field: pred.field,
+            cmp: pred.cmp,
+            const: Array.isArray(pred.constant) ? [...pred.constant] : pred.constant
+          }
+        };
+      case "hasPointer":
+        return { hasPointer: ppredToJson(pred.ppred) };
+      case "and":
+        return { and: [predToJson(pred.left), predToJson(pred.right)] };
+      case "or":
+        return { or: [predToJson(pred.left), predToJson(pred.right)] };
+      case "not":
+        return { not: predToJson(pred.pred) };
+    }
+  }
+  function orderToJson(o) {
+    switch (o.kind) {
+      case "byTimestamp":
+        return { byTimestamp: o.dir };
+      case "byAuthorRank":
+        return { byAuthorRank: [...o.authors] };
+      case "byPred":
+        return { byPred: { pred: predToJson(o.pred), then: orderToJson(o.then) } };
+      case "lexById":
+        return "lexById";
+    }
+  }
+  function propPolicyToJson(pp) {
+    switch (pp.kind) {
+      case "pick":
+        return { pick: { order: orderToJson(pp.order) } };
+      case "all":
+        return { all: { order: orderToJson(pp.order) } };
+      case "merge":
+        return { merge: pp.fn };
+      case "conflicts":
+        return { conflicts: { order: orderToJson(pp.order) } };
+      case "absentAs":
+        return { absentAs: { const: pp.constant, then: propPolicyToJson(pp.then) } };
+    }
+  }
+  function policyToJson(p) {
+    const props = {};
+    for (const [k, v] of p.props) props[k] = propPolicyToJson(v);
+    return { props, default: propPolicyToJson(p.default) };
+  }
+  function termToJson(term) {
+    switch (term.kind) {
+      case "input":
+        return "input";
+      case "select":
+        return { op: "select", pred: predToJson(term.pred), in: termToJson(term.of) };
+      case "union":
+        return { op: "union", left: termToJson(term.left), right: termToJson(term.right) };
+      case "mask": {
+        const policy = term.policy.kind === "trust" ? { trust: predToJson(term.policy.pred) } : term.policy.kind;
+        return { op: "mask", policy, in: termToJson(term.of) };
+      }
+      case "group": {
+        const key = term.key.kind === "const" ? { const: term.key.prop } : term.key.kind;
+        return { op: "group", key, in: termToJson(term.of) };
+      }
+      case "prune":
+        return {
+          op: "prune",
+          keep: term.keep === "all" ? "all" : strMatchToJson(term.keep),
+          in: termToJson(term.of)
+        };
+      case "expand":
+        return {
+          op: "expand",
+          role: strMatchToJson(term.role),
+          schema: schemaRefToJson(term.schema),
+          in: termToJson(term.of)
+        };
+      case "fix":
+        return { op: "fix", schema: schemaRefToJson(term.schema), entity: term.entity };
+      case "resolve":
+        return { op: "resolve", policy: policyToJson(term.policy), in: termToJson(term.of) };
+    }
+  }
+  function schemaRefToJson(ref) {
+    return ref.kind === "name" ? ref.name : { pinned: ref.hash };
+  }
+  function jsonToCbor(v) {
+    if (typeof v === "string") return tstr(v);
+    if (typeof v === "number") return float(v);
+    if (typeof v === "boolean") return bool(v);
+    if (Array.isArray(v)) return array(v.map(jsonToCbor));
+    if (typeof v === "object" && v !== null) {
+      return map(
+        Object.entries(v).map(([k, x]) => [
+          k,
+          jsonToCbor(x)
+        ])
+      );
+    }
+    throw new Error("json value outside the CBOR profile (null/undefined are not representable)");
+  }
+  function termCanonicalBytes(term) {
+    return encode(jsonToCbor(termToJson(term)));
+  }
+  function termHash(term) {
+    return contentAddress(termCanonicalBytes(term));
+  }
 
   // src/schema.ts
   function collectRefs(term) {
@@ -1470,19 +1688,83 @@
     walk(term);
     return out;
   }
+  var SchemaRegistry = class _SchemaRegistry {
+    constructor(byName, byHash) {
+      this.byName = byName;
+      this.byHash = byHash;
+    }
+    byName;
+    byHash;
+    // Rejects duplicate names, unresolved refs, and reference cycles (SPEC-3 §3).
+    // Data cycles remain legal — the DAG constraint is on programs, not data.
+    static build(schemas) {
+      const byName = /* @__PURE__ */ new Map();
+      const byHash = /* @__PURE__ */ new Map();
+      const hashOf = /* @__PURE__ */ new Map();
+      for (const s of schemas) {
+        if (byName.has(s.name)) throw new Error(`duplicate schema name: ${s.name}`);
+        byName.set(s.name, s);
+        const h = termHash(s.body);
+        hashOf.set(s.name, h);
+        if (!byHash.has(h)) byHash.set(h, s);
+      }
+      const resolveName = (ref, from) => {
+        if (ref.kind === "name") {
+          const s2 = byName.get(ref.name);
+          if (s2 === void 0)
+            throw new Error(`schema ${from} references unknown schema ${ref.name}`);
+          return s2.name;
+        }
+        const s = byHash.get(ref.hash);
+        if (s === void 0) {
+          throw new Error(`schema ${from} references unknown pinned schema ${ref.hash} (E13)`);
+        }
+        return s.name;
+      };
+      const refs = /* @__PURE__ */ new Map();
+      for (const s of schemas) {
+        refs.set(
+          s.name,
+          collectRefs(s.body).map((r) => resolveName(r, s.name))
+        );
+      }
+      const state = /* @__PURE__ */ new Map();
+      const visit = (name, path) => {
+        const st = state.get(name);
+        if (st === "done") return;
+        if (st === "visiting") {
+          throw new Error(`schema reference cycle: ${[...path, name].join(" -> ")} (SPEC-3 \xA73)`);
+        }
+        state.set(name, "visiting");
+        for (const r of refs.get(name) ?? []) visit(r, [...path, name]);
+        state.set(name, "done");
+      };
+      for (const s of schemas) visit(s.name, []);
+      return new _SchemaRegistry(byName, byHash);
+    }
+    get(name) {
+      return this.byName.get(name);
+    }
+    getByHash(hash) {
+      return this.byHash.get(hash);
+    }
+    resolve(ref) {
+      return ref.kind === "name" ? this.byName.get(ref.name) : this.byHash.get(ref.hash);
+    }
+  };
 
   // src/term-json.ts
   var CMPS = ["eq", "neq", "lt", "lte", "gt", "gte", "prefix", "inSet"];
   function nfc(s) {
     return s.normalize("NFC");
   }
-  function asObject(x, what) {
+  function asObject2(x, what) {
     if (typeof x !== "object" || x === null || Array.isArray(x)) {
       throw new Error(`expected object for ${what}`);
     }
     return x;
   }
-  function parsePrimitive(v, what) {
+  function parsePrimitive2(v, what) {
     if (typeof v === "string") return nfc(v);
     if (typeof v === "boolean") return v;
     if (typeof v === "number") {
@@ -1498,7 +1780,7 @@
     return v;
   }
   function parseStrMatch(raw, what) {
-    const o = asObject(raw, what);
+    const o = asObject2(raw, what);
     if (typeof o["exact"] === "string") return { kind: "exact", value: nfc(o["exact"]) };
     if (typeof o["prefix"] === "string") return { kind: "prefix", value: nfc(o["prefix"]) };
     if (Array.isArray(o["inSet"])) {
@@ -1513,13 +1795,13 @@
     throw new Error(`${what}: StrMatch must be exact | prefix | inSet`);
   }
   function parseValMatch(raw, what) {
-    const o = asObject(raw, what);
+    const o = asObject2(raw, what);
     if (o["vcmp"] !== void 0) {
-      const v = asObject(o["vcmp"], `${what}.vcmp`);
+      const v = asObject2(o["vcmp"], `${what}.vcmp`);
       const cmp = parseCmp(v["cmp"], `${what}.vcmp`);
       if (cmp === "inSet")
         throw new Error(`${what}: vcmp cmp inSet is not allowed; use the inSet arm`);
-      const value = parsePrimitive(v["value"], `${what}.vcmp`);
+      const value = parsePrimitive2(v["value"], `${what}.vcmp`);
       if (cmp === "prefix" && typeof value !== "string") {
         throw new Error(`${what}: prefix requires a string constant`);
       }
@@ -1529,17 +1811,17 @@
       if (o["between"].length !== 2) throw new Error(`${what}: between takes [lo, hi]`);
       return {
         kind: "between",
-        lo: parsePrimitive(o["between"][0], `${what}.between`),
-        hi: parsePrimitive(o["between"][1], `${what}.between`)
+        lo: parsePrimitive2(o["between"][0], `${what}.between`),
+        hi: parsePrimitive2(o["between"][1], `${what}.between`)
       };
     }
     if (Array.isArray(o["inSet"])) {
-      return { kind: "inSet", values: o["inSet"].map((v) => parsePrimitive(v, `${what}.inSet`)) };
+      return { kind: "inSet", values: o["inSet"].map((v) => parsePrimitive2(v, `${what}.inSet`)) };
     }
     throw new Error(`${what}: ValMatch must be vcmp | between | inSet`);
   }
   function parsePPred(raw) {
-    const o = asObject(raw, "hasPointer");
+    const o = asObject2(raw, "hasPointer");
     const out = {};
     if (o["role"] !== void 0) out.role = parseStrMatch(o["role"], "hasPointer.role");
     if (o["targetEntity"] !== void 0) {
@@ -1547,7 +1829,7 @@
       if (typeof te === "string") {
         out.targetEntity = { kind: "const", id: nfc(te) };
       } else {
-        const v = asObject(te, "targetEntity");
+        const v = asObject2(te, "targetEntity");
         if (v["var"] !== "root") throw new Error('targetEntity must be a string or {var: "root"}');
         out.targetEntity = { kind: "root" };
       }
@@ -1572,9 +1854,9 @@
   function parsePred(raw) {
     if (raw === "true") return { kind: "true" };
     if (raw === "false") return { kind: "false" };
-    const o = asObject(raw, "pred");
+    const o = asObject2(raw, "pred");
     if (o["match"] !== void 0) {
-      const m = asObject(o["match"], "match");
+      const m = asObject2(o["match"], "match");
       const field = m["field"];
       if (field !== "author" && field !== "timestamp" && field !== "id") {
         throw new Error(`match: unknown field ${String(field)}`);
@@ -1583,8 +1865,8 @@
       const rawConst = m["const"];
       const constant = cmp === "inSet" ? (() => {
         if (!Array.isArray(rawConst)) throw new Error("match: inSet requires an array const");
-        return rawConst.map((v) => parsePrimitive(v, "match.const"));
-      })() : parsePrimitive(rawConst, "match.const");
+        return rawConst.map((v) => parsePrimitive2(v, "match.const"));
+      })() : parsePrimitive2(rawConst, "match.const");
       if (cmp === "prefix" && typeof constant !== "string") {
         throw new Error("match: prefix requires a string const");
       }
@@ -1607,14 +1889,14 @@
   function parseMaskPolicy(raw) {
     if (raw === "drop") return { kind: "drop" };
     if (raw === "annotate") return { kind: "annotate" };
-    const o = asObject(raw, "mask.policy");
+    const o = asObject2(raw, "mask.policy");
     if (o["trust"] !== void 0) return { kind: "trust", pred: parsePred(o["trust"]) };
     throw new Error("mask policy must be drop | annotate | {trust: Pred}");
   }
   var MERGE_FNS = ["max", "min", "sum", "count", "and", "or", "concatSorted"];
   function parseOrder(raw) {
     if (raw === "lexById") return { kind: "lexById" };
-    const o = asObject(raw, "order");
+    const o = asObject2(raw, "order");
     if (o["byTimestamp"] !== void 0) {
       if (o["byTimestamp"] !== "desc" && o["byTimestamp"] !== "asc") {
         throw new Error("byTimestamp must be desc | asc");
@@ -1631,18 +1913,18 @@
       };
     }
     if (o["byPred"] !== void 0) {
-      const p = asObject(o["byPred"], "byPred");
+      const p = asObject2(o["byPred"], "byPred");
       return { kind: "byPred", pred: parsePred(p["pred"]), then: parseOrder(p["then"]) };
     }
     throw new Error("order must be lexById | byTimestamp | byAuthorRank | byPred");
   }
   function parsePropPolicy(raw) {
-    const o = asObject(raw, "propPolicy");
+    const o = asObject2(raw, "propPolicy");
     if (o["pick"] !== void 0) {
-      return { kind: "pick", order: parseOrder(asObject(o["pick"], "pick")["order"]) };
+      return { kind: "pick", order: parseOrder(asObject2(o["pick"], "pick")["order"]) };
     }
     if (o["all"] !== void 0) {
-      return { kind: "all", order: parseOrder(asObject(o["all"], "all")["order"]) };
+      return { kind: "all", order: parseOrder(asObject2(o["all"], "all")["order"]) };
     }
     if (o["merge"] !== void 0) {
       if (!MERGE_FNS.includes(o["merge"])) {
@@ -1651,23 +1933,23 @@
       return { kind: "merge", fn: o["merge"] };
     }
     if (o["conflicts"] !== void 0) {
-      return { kind: "conflicts", order: parseOrder(asObject(o["conflicts"], "conflicts")["order"]) };
+      return { kind: "conflicts", order: parseOrder(asObject2(o["conflicts"], "conflicts")["order"]) };
     }
     if (o["absentAs"] !== void 0) {
-      const a = asObject(o["absentAs"], "absentAs");
+      const a = asObject2(o["absentAs"], "absentAs");
       return {
         kind: "absentAs",
-        constant: parsePrimitive(a["const"], "absentAs.const"),
+        constant: parsePrimitive2(a["const"], "absentAs.const"),
         then: parsePropPolicy(a["then"])
       };
     }
     throw new Error("propPolicy must be pick | all | merge | conflicts | absentAs");
   }
   function parsePolicy(raw) {
-    const o = asObject(raw, "policy");
+    const o = asObject2(raw, "policy");
     const props = /* @__PURE__ */ new Map();
     if (o["props"] !== void 0) {
-      for (const [k, v] of Object.entries(asObject(o["props"], "policy.props"))) {
+      for (const [k, v] of Object.entries(asObject2(o["props"], "policy.props"))) {
         props.set(nfc(k), parsePropPolicy(v));
       }
     }
@@ -1676,19 +1958,19 @@
   function parseGroupKey(raw) {
     if (raw === "byTargetContext") return { kind: "byTargetContext" };
     if (raw === "byRole") return { kind: "byRole" };
-    const o = asObject(raw, "group.key");
+    const o = asObject2(raw, "group.key");
     if (typeof o["const"] === "string") return { kind: "const", prop: nfc(o["const"]) };
     throw new Error("group key must be byTargetContext | byRole | {const: string}");
   }
   function parseSchemaRef(raw) {
     if (typeof raw === "string") return { kind: "name", name: nfc(raw) };
-    const o = asObject(raw, "schemaRef");
+    const o = asObject2(raw, "schemaRef");
     if (typeof o["pinned"] === "string") return { kind: "pinned", hash: o["pinned"] };
     throw new Error("schema ref must be a name string or {pinned: hash} (E13)");
   }
   function parseTerm(raw) {
     if (raw === "input") return { kind: "input" };
-    const o = asObject(raw, "term");
+    const o = asObject2(raw, "term");
     switch (o["op"]) {
       case "select":
         return { kind: "select", pred: parsePred(o["pred"]), of: parseTerm(o["in"]) };
@@ -3898,6 +4180,2850 @@
     }
   }
 
+  // ../../vectors/keys/keys.json
+  var keys_default = [
+    {
+      keyId: "test-key-1",
+      seedHex: "0101010101010101010101010101010101010101010101010101010101010101",
+      publicKeyHex: "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      author: "ed25519:8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+    },
+    {
+      keyId: "test-key-2",
+      seedHex: "0202020202020202020202020202020202020202020202020202020202020202",
+      publicKeyHex: "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+      author: "ed25519:8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394"
+    },
+    {
+      keyId: "test-key-3",
+      seedHex: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      publicKeyHex: "ff57575dc7af8bfc4d0837cc1ce2017b686a88145dc5579a958e3462fe9a908e",
+      author: "ed25519:ff57575dc7af8bfc4d0837cc1ce2017b686a88145dc5579a958e3462fe9a908e"
+    }
+  ];
+
+  // ../../vectors/l0-delta/deltas.json
+  var deltas_default = [
+    {
+      name: "single-primitive-string",
+      spec: "SPEC-1 \xA72",
+      claims: {
+        timestamp: 0,
+        author: "did:key:zAuthorA",
+        pointers: [
+          {
+            role: "title",
+            target: {
+              value: "The Matrix"
+            }
+          }
+        ]
+      },
+      canonicalCborHex: "a366617574686f72706469643a6b65793a7a417574686f724168706f696e7465727381a264726f6c65657469746c65667461726765746a546865204d61747269786974696d657374616d70f90000",
+      id: "1e2030d96d325c7cfeb599f488598055041fb5303f062d3b32b43d5abedc6d3cee18"
+    },
+    {
+      name: "primitive-number",
+      spec: "SPEC-1 \xA72 / ERRATA D1",
+      claims: {
+        timestamp: 17179776e5,
+        author: "did:key:zAuthorA",
+        pointers: [
+          {
+            role: "releaseYear",
+            target: {
+              value: 1999
+            }
+          }
+        ]
+      },
+      canonicalCborHex: "a366617574686f72706469643a6b65793a7a417574686f724168706f696e7465727381a264726f6c656b72656c656173655965617266746172676574f967cf6974696d657374616d70fb4278fff71d000000",
+      id: "1e20a3a0a90a8c87aab1bad05dc7e971d20c772976658691ede840d5f38865c9de60"
+    },
+    {
+      name: "primitive-boolean",
+      spec: "SPEC-1 \xA72",
+      claims: {
+        timestamp: 0,
+        author: "did:key:zAuthorA",
+        pointers: [
+          {
+            role: "isCanonical",
+            target: {
+              value: true
+            }
+          }
+        ]
+      },
+      canonicalCborHex: "a366617574686f72706469643a6b65793a7a417574686f724168706f696e7465727381a264726f6c656b697343616e6f6e6963616c66746172676574f56974696d657374616d70f90000",
+      id: "1e2060947ef77cb97b5d8905129276e5d14d4fe81a32de9514da1da1ac210b7b68ee"
+    },
+    {
+      name: "entity-ref-no-context",
+      spec: "SPEC-1 \xA72 / ERRATA D5",
+      claims: {
+        timestamp: 0,
+        author: "did:key:zAuthorA",
+        pointers: [
+          {
+            role: "subject",
+            target: {
+              entityRef: {
+                id: "entity:the_matrix"
+              }
+            }
+          }
+        ]
+      },
+      canonicalCborHex: "a366617574686f72706469643a6b65793a7a417574686f724168706f696e7465727381a264726f6c65677375626a65637466746172676574a162696471656e746974793a7468655f6d61747269786974696d657374616d70f90000",
+      id: "1e2061705edb89869037fb5d850bcb235e5584292470249e650a0d790b28712c3949"
+    },
+    {
+      name: "entity-ref-with-context",
+      spec: "SPEC-1 \xA72 / ERRATA D5",
+      claims: {
+        timestamp: 0,
+        author: "did:key:zAuthorA",
+        pointers: [
+          {
+            role: "cast",
+            target: {
+              entityRef: {
+                id: "entity:keanu",
+                context: "actor"
+              }
+            }
+          }
+        ]
+      },
+      canonicalCborHex: "a366617574686f72706469643a6b65793a7a417574686f724168706f696e7465727381a264726f6c65646361737466746172676574a26269646c656e746974793a6b65616e7567636f6e74657874656163746f726974696d657374616d70f90000",
+      id: "1e20b210c4e3eb8a91fde259c7d2171cbf730685354f9f7a8df5e322da3f576e25a5"
+    },
+    {
+      name: "negation-delta-ref",
+      spec: "SPEC-1 \xA77 / ERRATA D5",
+      claims: {
+        timestamp: 1,
+        author: "did:key:zAuthorB",
+        pointers: [
+          {
+            role: "negates",
+            target: {
+              deltaRef: {
+                delta: "1e2000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          },
+          {
+            role: "reason",
+            target: {
+              value: "superseded"
+            }
+          }
+        ]
+      },
+      canonicalCborHex: "a366617574686f72706469643a6b65793a7a417574686f724268706f696e7465727382a264726f6c65676e65676174657366746172676574a16564656c74617842316532303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030a264726f6c6566726561736f6e667461726765746a737570657273656465646974696d657374616d70f93c00",
+      id: "1e207b4310e7d0247d5f4671ae0cff5f2fd1df36cc7ab5e198f121008ee3dd3f8e91"
+    },
+    {
+      name: "multi-pointer-purchase",
+      spec: "SPEC-1 \xA73",
+      claims: {
+        timestamp: 17179776e5,
+        author: "did:key:zAuthorA",
+        pointers: [
+          {
+            role: "buyer",
+            target: {
+              entityRef: {
+                id: "entity:alice",
+                context: "purchases"
+              }
+            }
+          },
+          {
+            role: "seller",
+            target: {
+              entityRef: {
+                id: "entity:bob",
+                context: "sales"
+              }
+            }
+          },
+          {
+            role: "item",
+            target: {
+              entityRef: {
+                id: "entity:widget",
+                context: "soldVia"
+              }
+            }
+          },
+          {
+            role: "price",
+            target: {
+              value: 19.99
+            }
+          }
+        ]
+      },
+      canonicalCborHex: "a366617574686f72706469643a6b65793a7a417574686f724168706f696e7465727384a264726f6c6565627579657266746172676574a26269646c656e746974793a616c69636567636f6e7465787469707572636861736573a264726f6c656673656c6c657266746172676574a26269646a656e746974793a626f6267636f6e746578746573616c6573a264726f6c65646974656d66746172676574a26269646d656e746974793a77696467657467636f6e7465787467736f6c64566961a264726f6c6565707269636566746172676574fb4033fd70a3d70a3d6974696d657374616d70fb4278fff71d000000",
+      id: "1e200561a1f0ed9b4f3619e1657ff6319fd6ca2812b8cd89ece6e46fb3608c219485"
+    },
+    {
+      name: "unicode-nfc-author",
+      spec: "SPEC-1 \xA74.1 / ERRATA D2",
+      claims: {
+        timestamp: 0,
+        author: "did:key:caf\xE9",
+        pointers: [
+          {
+            role: "note",
+            target: {
+              value: "\xFCn\xEFc\xF6d\xE9"
+            }
+          }
+        ]
+      },
+      canonicalCborHex: "a366617574686f726d6469643a6b65793a636166c3a968706f696e7465727381a264726f6c65646e6f7465667461726765746bc3bc6ec3af63c3b664c3a96974696d657374616d70f90000",
+      id: "1e20ae8d97020b460597ffd10075fb7aa4d69af7ded1fd06fdaf013e5d3f26e0513e"
+    }
+  ];
+
+  // ../../vectors/l0-delta/deltas-signed.json
+  var deltas_signed_default = [
+    {
+      name: "signed-single-claim",
+      spec: "SPEC-1 \xA75 / ERRATA D8-D9",
+      keyId: "test-key-1",
+      claims: {
+        timestamp: 17179776e5,
+        author: "ed25519:8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        pointers: [
+          {
+            role: "title",
+            target: {
+              value: "The Matrix"
+            }
+          }
+        ]
+      },
+      canonicalCborHex: "a366617574686f727848656432353531393a3861383865336464373430396631393566643532646232643363626135643732636136373039626631643934313231626633373438383031623430663666356368706f696e7465727381a264726f6c65657469746c65667461726765746a546865204d61747269786974696d657374616d70fb4278fff71d000000",
+      id: "1e205b744c395553a498e17204d46c22293de849532d7394e71ec4ea25665c1cc2fa",
+      sig: "07d38cc0b478a7f501fd51356a98383032725389adfa5a8fe00f589612181bd7f545299c621980255e6ded4fae30fc47860d8e64acb5ff8bcd32d02937d7f601"
+    },
+    {
+      name: "signed-entity-ref",
+      spec: "SPEC-1 \xA75 / ERRATA D8-D9",
+      keyId: "test-key-2",
+      claims: {
+        timestamp: 42,
+        author: "ed25519:8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+        pointers: [
+          {
+            role: "cast",
+            target: {
+              entityRef: {
+                id: "entity:keanu",
+                context: "actor"
+              }
+            }
+          }
+        ]
+      },
+      canonicalCborHex: "a366617574686f727848656432353531393a3831333937373065613837643137356635366133353436366333346337656363636238643861393162346565333761323564663630663562386663396233393468706f696e7465727381a264726f6c65646361737466746172676574a26269646c656e746974793a6b65616e7567636f6e74657874656163746f726974696d657374616d70f95140",
+      id: "1e20a8576e58e5cd51ff689252e4279927de268f524aa1a5deb60d24d788e91af512",
+      sig: "ef55abc24edb782b4d2be028cd2aa1c322df534875635b3643977990b4f879da9386fd21705d77331c2a221a69eb5a55c82a912034283ad3ea99c477b1440204"
+    },
+    {
+      name: "signed-negation",
+      spec: "SPEC-1 \xA75 \xA77 / ERRATA D8-D9",
+      keyId: "test-key-3",
+      claims: {
+        timestamp: 43,
+        author: "ed25519:ff57575dc7af8bfc4d0837cc1ce2017b686a88145dc5579a958e3462fe9a908e",
+        pointers: [
+          {
+            role: "negates",
+            target: {
+              deltaRef: {
+                delta: "1e2000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          }
+        ]
+      },
+      canonicalCborHex: "a366617574686f727848656432353531393a6666353735373564633761663862666334643038333763633163653230313762363836613838313435646335353739613935386533343632666539613930386568706f696e7465727381a264726f6c65676e65676174657366746172676574a16564656c746178423165323030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030306974696d657374616d70f95160",
+      id: "1e20de9cd104bc3d76e4062ec748ae98fb10f18fd7a99b9a80d1f1beaee38e48ef8e",
+      sig: "c13d762c618a5432d90dd0658570f92023be3b21de3cd25b1c4eb36e922e1be57bc7f57a5f49b11f2776af1f004ef45df8d087c583a4433ec229a5501ec7e309"
+    }
+  ];
+
+  // ../../vectors/l0-delta/set-digest.json
+  var set_digest_default = {
+    spec: "ERRATA D10 (provisional helper, not the SPEC-6 reconciliation digest)",
+    ids: [
+      "1e200561a1f0ed9b4f3619e1657ff6319fd6ca2812b8cd89ece6e46fb3608c219485",
+      "1e2030d96d325c7cfeb599f488598055041fb5303f062d3b32b43d5abedc6d3cee18",
+      "1e2060947ef77cb97b5d8905129276e5d14d4fe81a32de9514da1da1ac210b7b68ee",
+      "1e2061705edb89869037fb5d850bcb235e5584292470249e650a0d790b28712c3949",
+      "1e207b4310e7d0247d5f4671ae0cff5f2fd1df36cc7ab5e198f121008ee3dd3f8e91",
+      "1e20a3a0a90a8c87aab1bad05dc7e971d20c772976658691ede840d5f38865c9de60",
+      "1e20ae8d97020b460597ffd10075fb7aa4d69af7ded1fd06fdaf013e5d3f26e0513e",
+      "1e20b210c4e3eb8a91fde259c7d2171cbf730685354f9f7a8df5e322da3f576e25a5"
+    ],
+    digest: "1e2045ed910984d0adf599284650e16f071d52eed8d4da39c0a8eac22698d5e9ce5d"
+  };
+
+  // ../../vectors/l1-eval/eval-basic.json
+  var eval_basic_default = {
+    fixture: {
+      note: "deltas are listed with their fixture names; negations pin earlier deltas by id",
+      deltas: [
+        {
+          name: "d1-title-matrix",
+          id: "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392",
+          claims: {
+            timestamp: 100,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "title"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "The Matrix"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d2-title-reloaded",
+          id: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744",
+          claims: {
+            timestamp: 200,
+            author: "did:key:zBob",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "title"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "Matrix Reloaded"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d3-year",
+          id: "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+          claims: {
+            timestamp: 150,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "releaseYear"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: 1999
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d4-negates-d2",
+          id: "1e20813a3c2552fbe7603d6fdacc369752f5b077c7e6c2e4b2fcd3b850d7c68cbb97",
+          claims: {
+            timestamp: 300,
+            author: "did:key:zBob",
+            pointers: [
+              {
+                role: "negates",
+                target: {
+                  deltaRef: {
+                    delta: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744"
+                  }
+                }
+              },
+              {
+                role: "reason",
+                target: {
+                  value: "typo"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d5-negates-d4",
+          id: "1e20d52bc0da7ffc13ae23d2504ab0a2a06bbd943ff1d473c4915c4f3256f2dc059a",
+          claims: {
+            timestamp: 400,
+            author: "did:key:zCarol",
+            pointers: [
+              {
+                role: "negates",
+                target: {
+                  deltaRef: {
+                    delta: "1e20813a3c2552fbe7603d6fdacc369752f5b077c7e6c2e4b2fcd3b850d7c68cbb97"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d6-rating",
+          id: "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f",
+          claims: {
+            timestamp: 500,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "rating"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: 8.7
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d7-tag",
+          id: "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8",
+          claims: {
+            timestamp: 120,
+            author: "did:key:zCarol",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "tag"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "scifi"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d8-other-movie",
+          id: "1e20db70d6f537e65ce2a14d3b32a0abf3d48435be6dbc06aedba2f40ea1a3a5f709",
+          claims: {
+            timestamp: 600,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:johnwick",
+                    context: "title"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "John Wick"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    cases: [
+      {
+        name: "select-author-eq",
+        spec: "SPEC-2 \xA73 \xA74.1",
+        term: {
+          op: "select",
+          pred: {
+            match: {
+              field: "author",
+              cmp: "eq",
+              const: "did:key:zAlice"
+            }
+          },
+          in: "input"
+        },
+        expected: {
+          ids: [
+            "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+            "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392",
+            "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f",
+            "1e20db70d6f537e65ce2a14d3b32a0abf3d48435be6dbc06aedba2f40ea1a3a5f709"
+          ]
+        },
+        expectedCanonicalHex: "8478443165323031323866636339303366323237306337396130666534646536376265323465383564643763393564643131623464633235653761393339663432393937396331784431653230356566663439626236643033643362353362303932396538623761393635646132363064663935623234383934616136633338316265353834636633393339327844316532303662633536653039366535383535373332613266623863333739323338646239636332386236313332336165346366303534333631313665373366613866316678443165323064623730643666353337653635636532613134643362333261306162663364343834333562653664626330366165646261326634306561316133613566373039"
+      },
+      {
+        name: "select-timestamp-lte",
+        spec: "SPEC-2 \xA73 (time-travel as a filter)",
+        term: {
+          op: "select",
+          pred: {
+            match: {
+              field: "timestamp",
+              cmp: "lte",
+              const: 200
+            }
+          },
+          in: "input"
+        },
+        expected: {
+          ids: [
+            "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+            "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392",
+            "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744",
+            "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8"
+          ]
+        },
+        expectedCanonicalHex: "8478443165323031323866636339303366323237306337396130666534646536376265323465383564643763393564643131623464633235653761393339663432393937396331784431653230356566663439626236643033643362353362303932396538623761393635646132363064663935623234383934616136633338316265353834636633393339327844316532306237353864303834393164363234643435623431633438623863636437613834383135643934663965653232373333363037356163313364366137626337343478443165323063363930396266666239653162313938653334323139313165396232663434383263366130343263303939353435653762663464323631646230643837386238"
+      },
+      {
+        name: "select-target-entity",
+        spec: "SPEC-2 \xA73 hasPointer",
+        term: {
+          op: "select",
+          pred: {
+            hasPointer: {
+              targetEntity: "movie:matrix"
+            }
+          },
+          in: "input"
+        },
+        expected: {
+          ids: [
+            "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+            "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392",
+            "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f",
+            "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744",
+            "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8"
+          ]
+        },
+        expectedCanonicalHex: "857844316532303132386663633930336632323730633739613066653464653637626532346538356464376339356464313162346463323565376139333966343239393739633178443165323035656666343962623664303364336235336230393239653862376139363564613236306466393562323438393461613663333831626535383463663339333932784431653230366263353665303936653538353537333261326662386333373932333864623963633238623631333233616534636630353433363131366537336661386631667844316532306237353864303834393164363234643435623431633438623863636437613834383135643934663965653232373333363037356163313364366137626337343478443165323063363930396266666239653162313938653334323139313165396232663434383263366130343263303939353435653762663464323631646230643837386238"
+      },
+      {
+        name: "select-context-exact",
+        spec: "SPEC-2 \xA73 hasPointer.context",
+        term: {
+          op: "select",
+          pred: {
+            hasPointer: {
+              context: {
+                exact: "title"
+              }
+            }
+          },
+          in: "input"
+        },
+        expected: {
+          ids: [
+            "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392",
+            "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744",
+            "1e20db70d6f537e65ce2a14d3b32a0abf3d48435be6dbc06aedba2f40ea1a3a5f709"
+          ]
+        },
+        expectedCanonicalHex: "83784431653230356566663439626236643033643362353362303932396538623761393635646132363064663935623234383934616136633338316265353834636633393339327844316532306237353864303834393164363234643435623431633438623863636437613834383135643934663965653232373333363037356163313364366137626337343478443165323064623730643666353337653635636532613134643362333261306162663364343834333562653664626330366165646261326634306561316133613566373039"
+      },
+      {
+        name: "select-role-prefix",
+        spec: "SPEC-2 \xA73 StrMatch.prefix",
+        term: {
+          op: "select",
+          pred: {
+            hasPointer: {
+              role: {
+                prefix: "neg"
+              }
+            }
+          },
+          in: "input"
+        },
+        expected: {
+          ids: [
+            "1e20813a3c2552fbe7603d6fdacc369752f5b077c7e6c2e4b2fcd3b850d7c68cbb97",
+            "1e20d52bc0da7ffc13ae23d2504ab0a2a06bbd943ff1d473c4915c4f3256f2dc059a"
+          ]
+        },
+        expectedCanonicalHex: "827844316532303831336133633235353266626537363033643666646163633336393735326635623037376337653663326534623266636433623835306437633638636262393778443165323064353262633064613766666331336165323364323530346162306132613036626264393433666631643437336334393135633466333235366632646330353961"
+      },
+      {
+        name: "select-value-between",
+        spec: "SPEC-2 \xA73 ValMatch.between (value index contract)",
+        term: {
+          op: "select",
+          pred: {
+            hasPointer: {
+              targetValue: {
+                between: [
+                  5,
+                  2e3
+                ]
+              }
+            }
+          },
+          in: "input"
+        },
+        expected: {
+          ids: [
+            "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+            "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f"
+          ]
+        },
+        expectedCanonicalHex: "827844316532303132386663633930336632323730633739613066653464653637626532346538356464376339356464313162346463323565376139333966343239393739633178443165323036626335366530393665353835353733326132666238633337393233386462396363323862363133323361653463663035343336313136653733666138663166"
+      },
+      {
+        name: "select-value-gt-mixed-types",
+        spec: "SPEC-2 \xA73 / ERRATA-2 E3 (bool < number < string)",
+        note: "strings rank above all numbers in the canonical order, so every string value matches",
+        term: {
+          op: "select",
+          pred: {
+            hasPointer: {
+              targetValue: {
+                vcmp: {
+                  cmp: "gt",
+                  value: 100
+                }
+              }
+            }
+          },
+          in: "input"
+        },
+        expected: {
+          ids: [
+            "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+            "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392",
+            "1e20813a3c2552fbe7603d6fdacc369752f5b077c7e6c2e4b2fcd3b850d7c68cbb97",
+            "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744",
+            "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8",
+            "1e20db70d6f537e65ce2a14d3b32a0abf3d48435be6dbc06aedba2f40ea1a3a5f709"
+          ]
+        },
+        expectedCanonicalHex: "86784431653230313238666363393033663232373063373961306665346465363762653234653835646437633935646431316234646332356537613933396634323939373963317844316532303565666634396262366430336433623533623039323965386237613936356461323630646639356232343839346161366333383162653538346366333933393278443165323038313361336332353532666265373630336436666461636333363937353266356230373763376536633265346232666364336238353064376336386362623937784431653230623735386430383439316436323464343562343163343862386363643761383438313564393466396565323237333336303735616331336436613762633734347844316532306336393039626666623965316231393865333432313931316539623266343438326336613034326330393935343565376266346432363164623064383738623878443165323064623730643666353337653635636532613134643362333261306162663364343834333562653664626330366165646261326634306561316133613566373039"
+      },
+      {
+        name: "select-value-inset",
+        spec: "SPEC-2 \xA73 ValMatch.inSet",
+        term: {
+          op: "select",
+          pred: {
+            hasPointer: {
+              targetValue: {
+                inSet: [
+                  "scifi",
+                  "typo"
+                ]
+              }
+            }
+          },
+          in: "input"
+        },
+        expected: {
+          ids: [
+            "1e20813a3c2552fbe7603d6fdacc369752f5b077c7e6c2e4b2fcd3b850d7c68cbb97",
+            "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8"
+          ]
+        },
+        expectedCanonicalHex: "827844316532303831336133633235353266626537363033643666646163633336393735326635623037376337653663326534623266636433623835306437633638636262393778443165323063363930396266666239653162313938653334323139313165396232663434383263366130343263303939353435653762663464323631646230643837386238"
+      },
+      {
+        name: "select-and-not",
+        spec: "SPEC-2 \xA73 connectives",
+        term: {
+          op: "select",
+          pred: {
+            and: [
+              {
+                match: {
+                  field: "author",
+                  cmp: "eq",
+                  const: "did:key:zAlice"
+                }
+              },
+              {
+                not: {
+                  hasPointer: {
+                    context: {
+                      exact: "title"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          in: "input"
+        },
+        expected: {
+          ids: [
+            "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+            "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f"
+          ]
+        },
+        expectedCanonicalHex: "827844316532303132386663633930336632323730633739613066653464653637626532346538356464376339356464313162346463323565376139333966343239393739633178443165323036626335366530393665353835353733326132666238633337393233386462396363323862363133323361653463663035343336313136653733666138663166"
+      },
+      {
+        name: "select-false-is-empty",
+        spec: "SPEC-2 \xA73",
+        term: {
+          op: "select",
+          pred: "false",
+          in: "input"
+        },
+        expected: {
+          ids: []
+        },
+        expectedCanonicalHex: "80"
+      },
+      {
+        name: "union-two-selects",
+        spec: "SPEC-2 \xA74.2",
+        term: {
+          op: "union",
+          left: {
+            op: "select",
+            pred: {
+              match: {
+                field: "author",
+                cmp: "eq",
+                const: "did:key:zBob"
+              }
+            },
+            in: "input"
+          },
+          right: {
+            op: "select",
+            pred: {
+              match: {
+                field: "author",
+                cmp: "eq",
+                const: "did:key:zCarol"
+              }
+            },
+            in: "input"
+          }
+        },
+        expected: {
+          ids: [
+            "1e20813a3c2552fbe7603d6fdacc369752f5b077c7e6c2e4b2fcd3b850d7c68cbb97",
+            "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744",
+            "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8",
+            "1e20d52bc0da7ffc13ae23d2504ab0a2a06bbd943ff1d473c4915c4f3256f2dc059a"
+          ]
+        },
+        expectedCanonicalHex: "8478443165323038313361336332353532666265373630336436666461636333363937353266356230373763376536633265346232666364336238353064376336386362623937784431653230623735386430383439316436323464343562343163343862386363643761383438313564393466396565323237333336303735616331336436613762633734347844316532306336393039626666623965316231393865333432313931316539623266343438326336613034326330393935343565376266346432363164623064383738623878443165323064353262633064613766666331336165323364323530346162306132613036626264393433666631643437336334393135633466333235366632646330353961"
+      },
+      {
+        name: "mask-drop-chain",
+        spec: "SPEC-2 \xA74.3 (even-length chain reinstates)",
+        note: "d4 negates d2, d5 negates d4 => d4 suppressed, d2 reinstated",
+        term: {
+          op: "mask",
+          policy: "drop",
+          in: "input"
+        },
+        expected: {
+          ids: [
+            "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+            "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392",
+            "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f",
+            "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744",
+            "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8",
+            "1e20d52bc0da7ffc13ae23d2504ab0a2a06bbd943ff1d473c4915c4f3256f2dc059a",
+            "1e20db70d6f537e65ce2a14d3b32a0abf3d48435be6dbc06aedba2f40ea1a3a5f709"
+          ]
+        },
+        expectedCanonicalHex: "8778443165323031323866636339303366323237306337396130666534646536376265323465383564643763393564643131623464633235653761393339663432393937396331784431653230356566663439626236643033643362353362303932396538623761393635646132363064663935623234383934616136633338316265353834636633393339327844316532303662633536653039366535383535373332613266623863333739323338646239636332386236313332336165346366303534333631313665373366613866316678443165323062373538643038343931643632346434356234316334386238636364376138343831356439346639656532323733333630373561633133643661376263373434784431653230633639303962666662396531623139386533343231393131653962326634343832633661303432633039393534356537626634643236316462306438373862387844316532306435326263306461376666633133616532336432353034616230613261303662626439343366663164343733633439313563346633323536663264633035396178443165323064623730643666353337653635636532613134643362333261306162663364343834333562653664626330366165646261326634306561316133613566373039"
+      },
+      {
+        name: "mask-annotate",
+        spec: "SPEC-2 \xA74.3 / ERRATA-2 E2",
+        term: {
+          op: "mask",
+          policy: "annotate",
+          in: "input"
+        },
+        expected: {
+          ids: [
+            "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+            "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392",
+            "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f",
+            "1e20813a3c2552fbe7603d6fdacc369752f5b077c7e6c2e4b2fcd3b850d7c68cbb97",
+            "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744",
+            "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8",
+            "1e20d52bc0da7ffc13ae23d2504ab0a2a06bbd943ff1d473c4915c4f3256f2dc059a",
+            "1e20db70d6f537e65ce2a14d3b32a0abf3d48435be6dbc06aedba2f40ea1a3a5f709"
+          ],
+          negated: [
+            "1e20813a3c2552fbe7603d6fdacc369752f5b077c7e6c2e4b2fcd3b850d7c68cbb97"
+          ]
+        },
+        expectedCanonicalHex: "a263696473887844316532303132386663633930336632323730633739613066653464653637626532346538356464376339356464313162346463323565376139333966343239393739633178443165323035656666343962623664303364336235336230393239653862376139363564613236306466393562323438393461613663333831626535383463663339333932784431653230366263353665303936653538353537333261326662386333373932333864623963633238623631333233616534636630353433363131366537336661386631667844316532303831336133633235353266626537363033643666646163633336393735326635623037376337653663326534623266636433623835306437633638636262393778443165323062373538643038343931643632346434356234316334386238636364376138343831356439346639656532323733333630373561633133643661376263373434784431653230633639303962666662396531623139386533343231393131653962326634343832633661303432633039393534356537626634643236316462306438373862387844316532306435326263306461376666633133616532336432353034616230613261303662626439343366663164343733633439313563346633323536663264633035396178443165323064623730643666353337653635636532613134643362333261306162663364343834333562653664626330366165646261326634306561316133613566373039676e6567617465648178443165323038313361336332353532666265373630336436666461636333363937353266356230373763376536633265346232666364336238353064376336386362623937"
+      },
+      {
+        name: "mask-trust-restricts-candidates",
+        spec: "SPEC-2 \xA74.3 / ERRATA-2 E4",
+        note: "only B's negations count: d4 counts (d5 by C does not), so d2 is suppressed",
+        term: {
+          op: "mask",
+          policy: {
+            trust: {
+              match: {
+                field: "author",
+                cmp: "eq",
+                const: "did:key:zBob"
+              }
+            }
+          },
+          in: "input"
+        },
+        expected: {
+          ids: [
+            "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+            "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392",
+            "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f",
+            "1e20813a3c2552fbe7603d6fdacc369752f5b077c7e6c2e4b2fcd3b850d7c68cbb97",
+            "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8",
+            "1e20d52bc0da7ffc13ae23d2504ab0a2a06bbd943ff1d473c4915c4f3256f2dc059a",
+            "1e20db70d6f537e65ce2a14d3b32a0abf3d48435be6dbc06aedba2f40ea1a3a5f709"
+          ]
+        },
+        expectedCanonicalHex: "8778443165323031323866636339303366323237306337396130666534646536376265323465383564643763393564643131623464633235653761393339663432393937396331784431653230356566663439626236643033643362353362303932396538623761393635646132363064663935623234383934616136633338316265353834636633393339327844316532303662633536653039366535383535373332613266623863333739323338646239636332386236313332336165346366303534333631313665373366613866316678443165323038313361336332353532666265373630336436666461636333363937353266356230373763376536633265346232666364336238353064376336386362623937784431653230633639303962666662396531623139386533343231393131653962326634343832633661303432633039393534356537626634643236316462306438373862387844316532306435326263306461376666633133616532336432353034616230613261303662626439343366663164343733633439313563346633323536663264633035396178443165323064623730643666353337653635636532613134643362333261306162663364343834333562653664626330366165646261326634306561316133613566373039"
+      },
+      {
+        name: "select-then-mask-scopes-to-operand",
+        spec: "SPEC-2 \xA74.3 (negated(d, D) ranges over the operand set)",
+        note: "the negation d4 is excluded by the select, so nothing in the subset is suppressed",
+        term: {
+          op: "mask",
+          policy: "drop",
+          in: {
+            op: "select",
+            pred: {
+              hasPointer: {
+                targetEntity: "movie:matrix"
+              }
+            },
+            in: "input"
+          }
+        },
+        expected: {
+          ids: [
+            "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+            "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392",
+            "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f",
+            "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744",
+            "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8"
+          ]
+        },
+        expectedCanonicalHex: "857844316532303132386663633930336632323730633739613066653464653637626532346538356464376339356464313162346463323565376139333966343239393739633178443165323035656666343962623664303364336235336230393239653862376139363564613236306466393562323438393461613663333831626535383463663339333932784431653230366263353665303936653538353537333261326662386333373932333864623963633238623631333233616534636630353433363131366537336661386631667844316532306237353864303834393164363234643435623431633438623863636437613834383135643934663965653232373333363037356163313364366137626337343478443165323063363930396266666239653162313938653334323139313165396232663434383263366130343263303939353435653762663464323631646230643837386238"
+      }
+    ]
+  };
+
+  // ../../vectors/l1-eval/eval-hview.json
+  var eval_hview_default = {
+    fixture: {
+      note: "the eval-basic fixture plus d9 (multi-context filing) and d10 (contextless pointer)",
+      deltas: [
+        {
+          name: "d1-title-matrix",
+          id: "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392",
+          claims: {
+            timestamp: 100,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "title"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "The Matrix"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d2-title-reloaded",
+          id: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744",
+          claims: {
+            timestamp: 200,
+            author: "did:key:zBob",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "title"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "Matrix Reloaded"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d3-year",
+          id: "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+          claims: {
+            timestamp: 150,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "releaseYear"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: 1999
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d4-negates-d2",
+          id: "1e20813a3c2552fbe7603d6fdacc369752f5b077c7e6c2e4b2fcd3b850d7c68cbb97",
+          claims: {
+            timestamp: 300,
+            author: "did:key:zBob",
+            pointers: [
+              {
+                role: "negates",
+                target: {
+                  deltaRef: {
+                    delta: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744"
+                  }
+                }
+              },
+              {
+                role: "reason",
+                target: {
+                  value: "typo"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d5-negates-d4",
+          id: "1e20d52bc0da7ffc13ae23d2504ab0a2a06bbd943ff1d473c4915c4f3256f2dc059a",
+          claims: {
+            timestamp: 400,
+            author: "did:key:zCarol",
+            pointers: [
+              {
+                role: "negates",
+                target: {
+                  deltaRef: {
+                    delta: "1e20813a3c2552fbe7603d6fdacc369752f5b077c7e6c2e4b2fcd3b850d7c68cbb97"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d6-rating",
+          id: "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f",
+          claims: {
+            timestamp: 500,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "rating"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: 8.7
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d7-tag",
+          id: "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8",
+          claims: {
+            timestamp: 120,
+            author: "did:key:zCarol",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "tag"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "scifi"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d8-other-movie",
+          id: "1e20db70d6f537e65ce2a14d3b32a0abf3d48435be6dbc06aedba2f40ea1a3a5f709",
+          claims: {
+            timestamp: 600,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:johnwick",
+                    context: "title"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "John Wick"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d9-variant",
+          id: "1e205ed1ab653742434cc1dcd417ea55f1a150ebd3d50dba8ce50be8df83cd9f87a2",
+          claims: {
+            timestamp: 700,
+            author: "did:key:zCarol",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "title"
+                  }
+                }
+              },
+              {
+                role: "variantOf",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "related"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "The Matrix (1999)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "d10-contextless-mention",
+          id: "1e20068781e4ad85fb3d8509cee8f3654fc2a2795c09dedce91a5a308e720de2c83f",
+          claims: {
+            timestamp: 800,
+            author: "did:key:zBob",
+            pointers: [
+              {
+                role: "mentions",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    cases: [
+      {
+        name: "group-by-target-context-canonical-idiom",
+        spec: "SPEC-2 \xA74.4 / SPEC-3 \xA72 / E6",
+        note: "select relevant, drop negated, file by target-context \u2014 the canonical schema body",
+        root: "movie:matrix",
+        term: {
+          op: "group",
+          key: "byTargetContext",
+          in: {
+            op: "select",
+            pred: {
+              hasPointer: {
+                targetEntity: "movie:matrix"
+              }
+            },
+            in: {
+              op: "mask",
+              policy: "drop",
+              in: "input"
+            }
+          }
+        },
+        expected: {
+          id: "movie:matrix",
+          props: {
+            rating: [
+              {
+                id: "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f"
+              }
+            ],
+            related: [
+              {
+                id: "1e205ed1ab653742434cc1dcd417ea55f1a150ebd3d50dba8ce50be8df83cd9f87a2"
+              }
+            ],
+            releaseYear: [
+              {
+                id: "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1"
+              }
+            ],
+            tag: [
+              {
+                id: "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8"
+              }
+            ],
+            title: [
+              {
+                id: "1e205ed1ab653742434cc1dcd417ea55f1a150ebd3d50dba8ce50be8df83cd9f87a2"
+              },
+              {
+                id: "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392"
+              },
+              {
+                id: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744"
+              }
+            ]
+          }
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a56374616781a26269647844316532306336393039626666623965316231393865333432313931316539623266343438326336613034326330393935343565376266346432363164623064383738623866636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e7465787463746167a264726f6c656576616c7565667461726765746573636966696974696d657374616d70f95780657469746c6583a26269647844316532303565643161623635333734323433346363316463643431376561353566316131353065626433643530646261386365353062653864663833636439663837613266636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727383a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656976617269616e744f6666746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746772656c61746564a264726f6c656576616c75656674617267657471546865204d6174726978202831393939296974696d657374616d70f96178a26269647844316532303565666634396262366430336433623533623039323965386237613936356461323630646639356232343839346161366333383162653538346366333933393266636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746a546865204d61747269786974696d657374616d70f95640a26269647844316532306237353864303834393164363234643435623431633438623863636437613834383135643934663965653232373333363037356163313364366137626337343466636c61696d73a366617574686f726c6469643a6b65793a7a426f6268706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746f4d61747269782052656c6f616465646974696d657374616d70f95a4066726174696e6781a26269647844316532303662633536653039366535383535373332613266623863333739323338646239636332386236313332336165346366303534333631313665373366613866316666636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e7465787466726174696e67a264726f6c656576616c756566746172676574fb40216666666666666974696d657374616d70f95fd06772656c6174656481a26269647844316532303565643161623635333734323433346363316463643431376561353566316131353065626433643530646261386365353062653864663833636439663837613266636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727383a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656976617269616e744f6666746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746772656c61746564a264726f6c656576616c75656674617267657471546865204d6174726978202831393939296974696d657374616d70f961786b72656c656173655965617281a26269647844316532303132386663633930336632323730633739613066653464653637626532346538356464376339356464313162346463323565376139333966343239393739633166636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746b72656c6561736559656172a264726f6c656576616c756566746172676574f967cf6974696d657374616d70f958b0"
+      },
+      {
+        name: "group-by-role",
+        spec: "SPEC-2 \xA74.4 / E6",
+        root: "movie:matrix",
+        term: {
+          op: "group",
+          key: "byRole",
+          in: {
+            op: "select",
+            pred: {
+              hasPointer: {
+                targetEntity: "movie:matrix"
+              }
+            },
+            in: "input"
+          }
+        },
+        expected: {
+          id: "movie:matrix",
+          props: {
+            mentions: [
+              {
+                id: "1e20068781e4ad85fb3d8509cee8f3654fc2a2795c09dedce91a5a308e720de2c83f"
+              }
+            ],
+            subject: [
+              {
+                id: "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1"
+              },
+              {
+                id: "1e205ed1ab653742434cc1dcd417ea55f1a150ebd3d50dba8ce50be8df83cd9f87a2"
+              },
+              {
+                id: "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392"
+              },
+              {
+                id: "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f"
+              },
+              {
+                id: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744"
+              },
+              {
+                id: "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8"
+              }
+            ],
+            variantOf: [
+              {
+                id: "1e205ed1ab653742434cc1dcd417ea55f1a150ebd3d50dba8ce50be8df83cd9f87a2"
+              }
+            ]
+          }
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a3677375626a65637486a26269647844316532303132386663633930336632323730633739613066653464653637626532346538356464376339356464313162346463323565376139333966343239393739633166636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746b72656c6561736559656172a264726f6c656576616c756566746172676574f967cf6974696d657374616d70f958b0a26269647844316532303565643161623635333734323433346363316463643431376561353566316131353065626433643530646261386365353062653864663833636439663837613266636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727383a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656976617269616e744f6666746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746772656c61746564a264726f6c656576616c75656674617267657471546865204d6174726978202831393939296974696d657374616d70f96178a26269647844316532303565666634396262366430336433623533623039323965386237613936356461323630646639356232343839346161366333383162653538346366333933393266636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746a546865204d61747269786974696d657374616d70f95640a26269647844316532303662633536653039366535383535373332613266623863333739323338646239636332386236313332336165346366303534333631313665373366613866316666636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e7465787466726174696e67a264726f6c656576616c756566746172676574fb40216666666666666974696d657374616d70f95fd0a26269647844316532306237353864303834393164363234643435623431633438623863636437613834383135643934663965653232373333363037356163313364366137626337343466636c61696d73a366617574686f726c6469643a6b65793a7a426f6268706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746f4d61747269782052656c6f616465646974696d657374616d70f95a40a26269647844316532306336393039626666623965316231393865333432313931316539623266343438326336613034326330393935343565376266346432363164623064383738623866636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e7465787463746167a264726f6c656576616c7565667461726765746573636966696974696d657374616d70f95780686d656e74696f6e7381a26269647844316532303036383738316534616438356662336438353039636565386633363534666332613237393563303964656463653931613561333038653732306465326338336666636c61696d73a366617574686f726c6469643a6b65793a7a426f6268706f696e7465727381a264726f6c65686d656e74696f6e7366746172676574a16269646c6d6f7669653a6d61747269786974696d657374616d70f962406976617269616e744f6681a26269647844316532303565643161623635333734323433346363316463643431376561353566316131353065626433643530646261386365353062653864663833636439663837613266636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727383a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656976617269616e744f6666746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746772656c61746564a264726f6c656576616c75656674617267657471546865204d6174726978202831393939296974696d657374616d70f96178"
+      },
+      {
+        name: "group-const-bags-everything",
+        spec: "SPEC-2 \xA74.4 / E6 (const files without a filing pointer)",
+        root: "movie:matrix",
+        term: {
+          op: "group",
+          key: {
+            const: "claims"
+          },
+          in: {
+            op: "select",
+            pred: {
+              match: {
+                field: "author",
+                cmp: "eq",
+                const: "did:key:zAlice"
+              }
+            },
+            in: "input"
+          }
+        },
+        expected: {
+          id: "movie:matrix",
+          props: {
+            claims: [
+              {
+                id: "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1"
+              },
+              {
+                id: "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392"
+              },
+              {
+                id: "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f"
+              },
+              {
+                id: "1e20db70d6f537e65ce2a14d3b32a0abf3d48435be6dbc06aedba2f40ea1a3a5f709"
+              }
+            ]
+          }
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a166636c61696d7384a26269647844316532303132386663633930336632323730633739613066653464653637626532346538356464376339356464313162346463323565376139333966343239393739633166636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746b72656c6561736559656172a264726f6c656576616c756566746172676574f967cf6974696d657374616d70f958b0a26269647844316532303565666634396262366430336433623533623039323965386237613936356461323630646639356232343839346161366333383162653538346366333933393266636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746a546865204d61747269786974696d657374616d70f95640a26269647844316532303662633536653039366535383535373332613266623863333739323338646239636332386236313332336165346366303534333631313665373366613866316666636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e7465787466726174696e67a264726f6c656576616c756566746172676574fb40216666666666666974696d657374616d70f95fd0a26269647844316532306462373064366635333765363563653261313464336233326130616266336434383433356265366462633036616564626132663430656131613361356637303966636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646e6d6f7669653a6a6f686e7769636b67636f6e74657874657469746c65a264726f6c656576616c756566746172676574694a6f686e205769636b6974696d657374616d70f960b0"
+      },
+      {
+        name: "group-threads-annotate-tags",
+        spec: "SPEC-5 \xA74 audit views / E7",
+        note: "d2 is negated in the full input, so its entry carries negated: true",
+        root: "movie:matrix",
+        term: {
+          op: "group",
+          key: "byTargetContext",
+          in: {
+            op: "mask",
+            policy: "annotate",
+            in: "input"
+          }
+        },
+        expected: {
+          id: "movie:matrix",
+          props: {
+            rating: [
+              {
+                id: "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f"
+              }
+            ],
+            related: [
+              {
+                id: "1e205ed1ab653742434cc1dcd417ea55f1a150ebd3d50dba8ce50be8df83cd9f87a2"
+              }
+            ],
+            releaseYear: [
+              {
+                id: "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1"
+              }
+            ],
+            tag: [
+              {
+                id: "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8"
+              }
+            ],
+            title: [
+              {
+                id: "1e205ed1ab653742434cc1dcd417ea55f1a150ebd3d50dba8ce50be8df83cd9f87a2"
+              },
+              {
+                id: "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392"
+              },
+              {
+                id: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744"
+              }
+            ]
+          }
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a56374616781a26269647844316532306336393039626666623965316231393865333432313931316539623266343438326336613034326330393935343565376266346432363164623064383738623866636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e7465787463746167a264726f6c656576616c7565667461726765746573636966696974696d657374616d70f95780657469746c6583a26269647844316532303565643161623635333734323433346363316463643431376561353566316131353065626433643530646261386365353062653864663833636439663837613266636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727383a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656976617269616e744f6666746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746772656c61746564a264726f6c656576616c75656674617267657471546865204d6174726978202831393939296974696d657374616d70f96178a26269647844316532303565666634396262366430336433623533623039323965386237613936356461323630646639356232343839346161366333383162653538346366333933393266636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746a546865204d61747269786974696d657374616d70f95640a26269647844316532306237353864303834393164363234643435623431633438623863636437613834383135643934663965653232373333363037356163313364366137626337343466636c61696d73a366617574686f726c6469643a6b65793a7a426f6268706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746f4d61747269782052656c6f616465646974696d657374616d70f95a4066726174696e6781a26269647844316532303662633536653039366535383535373332613266623863333739323338646239636332386236313332336165346366303534333631313665373366613866316666636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e7465787466726174696e67a264726f6c656576616c756566746172676574fb40216666666666666974696d657374616d70f95fd06772656c6174656481a26269647844316532303565643161623635333734323433346363316463643431376561353566316131353065626433643530646261386365353062653864663833636439663837613266636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727383a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656976617269616e744f6666746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746772656c61746564a264726f6c656576616c75656674617267657471546865204d6174726978202831393939296974696d657374616d70f961786b72656c656173655965617281a26269647844316532303132386663633930336632323730633739613066653464653637626532346538356464376339356464313162346463323565376139333966343239393739633166636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746b72656c6561736559656172a264726f6c656576616c756566746172676574f967cf6974696d657374616d70f958b0"
+      },
+      {
+        name: "group-by-target-context-skips-contextless",
+        spec: "E6 (a filing pointer without context files nothing)",
+        root: "movie:matrix",
+        term: {
+          op: "group",
+          key: "byTargetContext",
+          in: {
+            op: "select",
+            pred: {
+              match: {
+                field: "author",
+                cmp: "eq",
+                const: "did:key:zBob"
+              }
+            },
+            in: "input"
+          }
+        },
+        expected: {
+          id: "movie:matrix",
+          props: {
+            title: [
+              {
+                id: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744"
+              }
+            ]
+          }
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a1657469746c6581a26269647844316532306237353864303834393164363234643435623431633438623863636437613834383135643934663965653232373333363037356163313364366137626337343466636c61696d73a366617574686f726c6469643a6b65793a7a426f6268706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746f4d61747269782052656c6f616465646974696d657374616d70f95a40"
+      },
+      {
+        name: "group-by-role-files-contextless",
+        spec: "E6 (byRole files under the pointer role)",
+        root: "movie:matrix",
+        term: {
+          op: "group",
+          key: "byRole",
+          in: {
+            op: "select",
+            pred: {
+              match: {
+                field: "author",
+                cmp: "eq",
+                const: "did:key:zBob"
+              }
+            },
+            in: "input"
+          }
+        },
+        expected: {
+          id: "movie:matrix",
+          props: {
+            mentions: [
+              {
+                id: "1e20068781e4ad85fb3d8509cee8f3654fc2a2795c09dedce91a5a308e720de2c83f"
+              }
+            ],
+            subject: [
+              {
+                id: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744"
+              }
+            ]
+          }
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a2677375626a65637481a26269647844316532306237353864303834393164363234643435623431633438623863636437613834383135643934663965653232373333363037356163313364366137626337343466636c61696d73a366617574686f726c6469643a6b65793a7a426f6268706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746f4d61747269782052656c6f616465646974696d657374616d70f95a40686d656e74696f6e7381a26269647844316532303036383738316534616438356662336438353039636565386633363534666332613237393563303964656463653931613561333038653732306465326338336666636c61696d73a366617574686f726c6469643a6b65793a7a426f6268706f696e7465727381a264726f6c65686d656e74696f6e7366746172676574a16269646c6d6f7669653a6d61747269786974696d657374616d70f96240"
+      },
+      {
+        name: "group-empty-root",
+        spec: "SPEC-3 \xA77 (empty props, never null)",
+        root: "movie:nonexistent",
+        term: {
+          op: "group",
+          key: "byTargetContext",
+          in: "input"
+        },
+        expected: {
+          id: "movie:nonexistent",
+          props: {}
+        },
+        expectedCanonicalHex: "a2626964716d6f7669653a6e6f6e6578697374656e746570726f7073a0"
+      },
+      {
+        name: "prune-keep-exact",
+        spec: "SPEC-2 \xA74.6 / E8",
+        root: "movie:matrix",
+        term: {
+          op: "prune",
+          keep: {
+            exact: "title"
+          },
+          in: {
+            op: "group",
+            key: "byTargetContext",
+            in: {
+              op: "select",
+              pred: {
+                hasPointer: {
+                  targetEntity: "movie:matrix"
+                }
+              },
+              in: {
+                op: "mask",
+                policy: "drop",
+                in: "input"
+              }
+            }
+          }
+        },
+        expected: {
+          id: "movie:matrix",
+          props: {
+            title: [
+              {
+                id: "1e205ed1ab653742434cc1dcd417ea55f1a150ebd3d50dba8ce50be8df83cd9f87a2"
+              },
+              {
+                id: "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392"
+              },
+              {
+                id: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744"
+              }
+            ]
+          }
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a1657469746c6583a26269647844316532303565643161623635333734323433346363316463643431376561353566316131353065626433643530646261386365353062653864663833636439663837613266636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727383a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656976617269616e744f6666746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746772656c61746564a264726f6c656576616c75656674617267657471546865204d6174726978202831393939296974696d657374616d70f96178a26269647844316532303565666634396262366430336433623533623039323965386237613936356461323630646639356232343839346161366333383162653538346366333933393266636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746a546865204d61747269786974696d657374616d70f95640a26269647844316532306237353864303834393164363234643435623431633438623863636437613834383135643934663965653232373333363037356163313364366137626337343466636c61696d73a366617574686f726c6469643a6b65793a7a426f6268706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746f4d61747269782052656c6f616465646974696d657374616d70f95a40"
+      },
+      {
+        name: "prune-keep-inset",
+        spec: "SPEC-2 \xA74.6 / E8",
+        root: "movie:matrix",
+        term: {
+          op: "prune",
+          keep: {
+            inSet: [
+              "title",
+              "rating"
+            ]
+          },
+          in: {
+            op: "group",
+            key: "byTargetContext",
+            in: {
+              op: "select",
+              pred: {
+                hasPointer: {
+                  targetEntity: "movie:matrix"
+                }
+              },
+              in: {
+                op: "mask",
+                policy: "drop",
+                in: "input"
+              }
+            }
+          }
+        },
+        expected: {
+          id: "movie:matrix",
+          props: {
+            rating: [
+              {
+                id: "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f"
+              }
+            ],
+            title: [
+              {
+                id: "1e205ed1ab653742434cc1dcd417ea55f1a150ebd3d50dba8ce50be8df83cd9f87a2"
+              },
+              {
+                id: "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392"
+              },
+              {
+                id: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744"
+              }
+            ]
+          }
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a2657469746c6583a26269647844316532303565643161623635333734323433346363316463643431376561353566316131353065626433643530646261386365353062653864663833636439663837613266636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727383a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656976617269616e744f6666746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746772656c61746564a264726f6c656576616c75656674617267657471546865204d6174726978202831393939296974696d657374616d70f96178a26269647844316532303565666634396262366430336433623533623039323965386237613936356461323630646639356232343839346161366333383162653538346366333933393266636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746a546865204d61747269786974696d657374616d70f95640a26269647844316532306237353864303834393164363234643435623431633438623863636437613834383135643934663965653232373333363037356163313364366137626337343466636c61696d73a366617574686f726c6469643a6b65793a7a426f6268706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746f4d61747269782052656c6f616465646974696d657374616d70f95a4066726174696e6781a26269647844316532303662633536653039366535383535373332613266623863333739323338646239636332386236313332336165346366303534333631313665373366613866316666636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e7465787466726174696e67a264726f6c656576616c756566746172676574fb40216666666666666974696d657374616d70f95fd0"
+      },
+      {
+        name: "prune-keep-prefix",
+        spec: "SPEC-2 \xA74.6 / E8",
+        root: "movie:matrix",
+        term: {
+          op: "prune",
+          keep: {
+            prefix: "re"
+          },
+          in: {
+            op: "group",
+            key: "byTargetContext",
+            in: {
+              op: "select",
+              pred: {
+                hasPointer: {
+                  targetEntity: "movie:matrix"
+                }
+              },
+              in: {
+                op: "mask",
+                policy: "drop",
+                in: "input"
+              }
+            }
+          }
+        },
+        expected: {
+          id: "movie:matrix",
+          props: {
+            related: [
+              {
+                id: "1e205ed1ab653742434cc1dcd417ea55f1a150ebd3d50dba8ce50be8df83cd9f87a2"
+              }
+            ],
+            releaseYear: [
+              {
+                id: "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1"
+              }
+            ]
+          }
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a26772656c6174656481a26269647844316532303565643161623635333734323433346363316463643431376561353566316131353065626433643530646261386365353062653864663833636439663837613266636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727383a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656976617269616e744f6666746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746772656c61746564a264726f6c656576616c75656674617267657471546865204d6174726978202831393939296974696d657374616d70f961786b72656c656173655965617281a26269647844316532303132386663633930336632323730633739613066653464653637626532346538356464376339356464313162346463323565376139333966343239393739633166636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746b72656c6561736559656172a264726f6c656576616c756566746172676574f967cf6974696d657374616d70f958b0"
+      },
+      {
+        name: "prune-all-is-identity",
+        spec: "SPEC-2 \xA74.6 / E8",
+        root: "movie:matrix",
+        term: {
+          op: "prune",
+          keep: "all",
+          in: {
+            op: "group",
+            key: "byTargetContext",
+            in: {
+              op: "select",
+              pred: {
+                hasPointer: {
+                  targetEntity: "movie:matrix"
+                }
+              },
+              in: {
+                op: "mask",
+                policy: "drop",
+                in: "input"
+              }
+            }
+          }
+        },
+        expected: {
+          id: "movie:matrix",
+          props: {
+            rating: [
+              {
+                id: "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f"
+              }
+            ],
+            related: [
+              {
+                id: "1e205ed1ab653742434cc1dcd417ea55f1a150ebd3d50dba8ce50be8df83cd9f87a2"
+              }
+            ],
+            releaseYear: [
+              {
+                id: "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1"
+              }
+            ],
+            tag: [
+              {
+                id: "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8"
+              }
+            ],
+            title: [
+              {
+                id: "1e205ed1ab653742434cc1dcd417ea55f1a150ebd3d50dba8ce50be8df83cd9f87a2"
+              },
+              {
+                id: "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392"
+              },
+              {
+                id: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744"
+              }
+            ]
+          }
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a56374616781a26269647844316532306336393039626666623965316231393865333432313931316539623266343438326336613034326330393935343565376266346432363164623064383738623866636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e7465787463746167a264726f6c656576616c7565667461726765746573636966696974696d657374616d70f95780657469746c6583a26269647844316532303565643161623635333734323433346363316463643431376561353566316131353065626433643530646261386365353062653864663833636439663837613266636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727383a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656976617269616e744f6666746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746772656c61746564a264726f6c656576616c75656674617267657471546865204d6174726978202831393939296974696d657374616d70f96178a26269647844316532303565666634396262366430336433623533623039323965386237613936356461323630646639356232343839346161366333383162653538346366333933393266636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746a546865204d61747269786974696d657374616d70f95640a26269647844316532306237353864303834393164363234643435623431633438623863636437613834383135643934663965653232373333363037356163313364366137626337343466636c61696d73a366617574686f726c6469643a6b65793a7a426f6268706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746f4d61747269782052656c6f616465646974696d657374616d70f95a4066726174696e6781a26269647844316532303662633536653039366535383535373332613266623863333739323338646239636332386236313332336165346366303534333631313665373366613866316666636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e7465787466726174696e67a264726f6c656576616c756566746172676574fb40216666666666666974696d657374616d70f95fd06772656c6174656481a26269647844316532303565643161623635333734323433346363316463643431376561353566316131353065626433643530646261386365353062653864663833636439663837613266636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727383a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656976617269616e744f6666746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746772656c61746564a264726f6c656576616c75656674617267657471546865204d6174726978202831393939296974696d657374616d70f961786b72656c656173655965617281a26269647844316532303132386663633930336632323730633739613066653464653637626532346538356464376339356464313162346463323565376139333966343239393739633166636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746b72656c6561736559656172a264726f6c656576616c756566746172676574f967cf6974696d657374616d70f958b0"
+      }
+    ]
+  };
+
+  // ../../vectors/l1-eval/eval-expand.json
+  var eval_expand_default = {
+    fixture: {
+      note: "actors/movies with a keanu<->brzrkr data cycle; schema DAG depth 3",
+      deltas: [
+        {
+          name: "a1-keanu-name",
+          id: "1e20537093438b01909c6e1712242059f38f66f089ea45414cb7ddf7c9ed29ded216",
+          claims: {
+            timestamp: 100,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "actor:keanu",
+                    context: "name"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "Keanu Reeves"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "m1-matrix-title",
+          id: "1e2066627aab9274f448bbcac65c548038bd035e9118a3a9a09a3a9a7f9a5972483e",
+          claims: {
+            timestamp: 110,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "title"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "The Matrix"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "m2-brzrkr-title",
+          id: "1e201f3746069c9313015cec661386a7e766378557dbe95764ce61e1e051810a467d",
+          claims: {
+            timestamp: 120,
+            author: "did:key:zBob",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:brzrkr",
+                    context: "title"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "BRZRKR"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "c1-cast",
+          id: "1e207ea21fff501c626cdb8e592db4162519c89a84feadfbbf5851577e5ef2c04d9d",
+          claims: {
+            timestamp: 130,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "movie",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "cast"
+                  }
+                }
+              },
+              {
+                role: "actor",
+                target: {
+                  entityRef: {
+                    id: "actor:keanu",
+                    context: "filmography"
+                  }
+                }
+              },
+              {
+                role: "character",
+                target: {
+                  value: "Neo"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "c2-created",
+          id: "1e20e941d451956d79a42ac465f2f832b3e47903522fc9eb6b3d41e0871da3943430",
+          claims: {
+            timestamp: 140,
+            author: "did:key:zCarol",
+            pointers: [
+              {
+                role: "creator",
+                target: {
+                  entityRef: {
+                    id: "actor:keanu",
+                    context: "createdWorks"
+                  }
+                }
+              },
+              {
+                role: "work",
+                target: {
+                  entityRef: {
+                    id: "movie:brzrkr",
+                    context: "createdBy"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    schemas: [
+      {
+        name: "MovieBasic",
+        alg: 1,
+        body: {
+          op: "group",
+          key: "byTargetContext",
+          in: {
+            op: "select",
+            pred: {
+              hasPointer: {
+                targetEntity: {
+                  var: "root"
+                }
+              }
+            },
+            in: {
+              op: "mask",
+              policy: "drop",
+              in: "input"
+            }
+          }
+        }
+      },
+      {
+        name: "ActorName",
+        alg: 1,
+        body: {
+          op: "group",
+          key: "byTargetContext",
+          in: {
+            op: "select",
+            pred: {
+              hasPointer: {
+                targetEntity: {
+                  var: "root"
+                }
+              }
+            },
+            in: {
+              op: "mask",
+              policy: "drop",
+              in: "input"
+            }
+          }
+        }
+      },
+      {
+        name: "MovieWithCast",
+        alg: 1,
+        body: {
+          op: "expand",
+          role: {
+            exact: "actor"
+          },
+          schema: "ActorName",
+          in: {
+            op: "group",
+            key: "byTargetContext",
+            in: {
+              op: "select",
+              pred: {
+                hasPointer: {
+                  targetEntity: {
+                    var: "root"
+                  }
+                }
+              },
+              in: {
+                op: "mask",
+                policy: "drop",
+                in: "input"
+              }
+            }
+          }
+        }
+      },
+      {
+        name: "ActorWithWorks",
+        alg: 1,
+        body: {
+          op: "expand",
+          role: {
+            exact: "work"
+          },
+          schema: "MovieBasic",
+          in: {
+            op: "group",
+            key: "byTargetContext",
+            in: {
+              op: "select",
+              pred: {
+                hasPointer: {
+                  targetEntity: {
+                    var: "root"
+                  }
+                }
+              },
+              in: {
+                op: "mask",
+                policy: "drop",
+                in: "input"
+              }
+            }
+          }
+        }
+      },
+      {
+        name: "MovieDeep",
+        alg: 1,
+        body: {
+          op: "expand",
+          role: {
+            exact: "actor"
+          },
+          schema: "ActorWithWorks",
+          in: {
+            op: "group",
+            key: "byTargetContext",
+            in: {
+              op: "select",
+              pred: {
+                hasPointer: {
+                  targetEntity: {
+                    var: "root"
+                  }
+                }
+              },
+              in: {
+                op: "mask",
+                policy: "drop",
+                in: "input"
+              }
+            }
+          }
+        }
+      }
+    ],
+    cases: [
+      {
+        name: "fix-terminal-schema",
+        spec: "SPEC-2 \xA74.8 / E10",
+        note: "no expands: entity refs stay bare (terminal schema, SPEC-3 \xA73)",
+        term: {
+          op: "fix",
+          schema: "MovieBasic",
+          entity: "movie:matrix"
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a2646361737481a26269647844316532303765613231666666353031633632366364623865353932646234313632353139633839613834666561646662626635383531353737653565663263303464396466636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727383a264726f6c65656d6f76696566746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746463617374a264726f6c65656163746f7266746172676574a26269646b6163746f723a6b65616e7567636f6e746578746b66696c6d6f677261706879a264726f6c656963686172616374657266746172676574634e656f6974696d657374616d70f95810657469746c6581a26269647844316532303636363237616162393237346634343862626361633635633534383033386264303335653931313861336139613039613361396137663961353937323438336566636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746a546865204d61747269786974696d657374616d70f956e0"
+      },
+      {
+        name: "fix-expand-one-level",
+        spec: "SPEC-2 \xA74.5 \xA74.8 / E11",
+        note: "c1's actor pointer is replaced by the ActorName HView at actor:keanu",
+        term: {
+          op: "fix",
+          schema: "MovieWithCast",
+          entity: "movie:matrix"
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a2646361737481a26269647844316532303765613231666666353031633632366364623865353932646234313632353139633839613834666561646662626635383531353737653565663263303464396466636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727383a264726f6c65656d6f76696566746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746463617374a264726f6c65656163746f7266746172676574a26269646b6163746f723a6b65616e756570726f7073a3646e616d6581a26269647844316532303533373039333433386230313930396336653137313232343230353966333866363666303839656134353431346362376464663763396564323964656432313666636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646b6163746f723a6b65616e7567636f6e74657874646e616d65a264726f6c656576616c7565667461726765746c4b65616e75205265657665736974696d657374616d70f956406b66696c6d6f67726170687981a26269647844316532303765613231666666353031633632366364623865353932646234313632353139633839613834666561646662626635383531353737653565663263303464396466636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727383a264726f6c65656d6f76696566746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746463617374a264726f6c65656163746f7266746172676574a26269646b6163746f723a6b65616e7567636f6e746578746b66696c6d6f677261706879a264726f6c656963686172616374657266746172676574634e656f6974696d657374616d70f958106c63726561746564576f726b7381a26269647844316532306539343164343531393536643739613432616334363566326638333262336534373930333532326663396562366233643431653038373164613339343334333066636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727382a264726f6c656763726561746f7266746172676574a26269646b6163746f723a6b65616e7567636f6e746578746c63726561746564576f726b73a264726f6c6564776f726b66746172676574a26269646c6d6f7669653a62727a726b7267636f6e74657874696372656174656442796974696d657374616d70f95860a264726f6c656963686172616374657266746172676574634e656f6974696d657374616d70f95810657469746c6581a26269647844316532303636363237616162393237346634343862626361633635633534383033386264303335653931313861336139613039613361396137663961353937323438336566636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746a546865204d61747269786974696d657374616d70f956e0"
+      },
+      {
+        name: "fix-data-cycle-terminates",
+        spec: "SPEC-3 \xA73 (DAG on programs, not data)",
+        note: "keanu -> brzrkr -> keanu is a data cycle; the schema chain MovieDeep -> ActorWithWorks -> MovieBasic is finite, so expansion terminates with brzrkr's createdBy as a bare ref",
+        term: {
+          op: "fix",
+          schema: "MovieDeep",
+          entity: "movie:matrix"
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a2646361737481a26269647844316532303765613231666666353031633632366364623865353932646234313632353139633839613834666561646662626635383531353737653565663263303464396466636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727383a264726f6c65656d6f76696566746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746463617374a264726f6c65656163746f7266746172676574a26269646b6163746f723a6b65616e756570726f7073a3646e616d6581a26269647844316532303533373039333433386230313930396336653137313232343230353966333866363666303839656134353431346362376464663763396564323964656432313666636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646b6163746f723a6b65616e7567636f6e74657874646e616d65a264726f6c656576616c7565667461726765746c4b65616e75205265657665736974696d657374616d70f956406b66696c6d6f67726170687981a26269647844316532303765613231666666353031633632366364623865353932646234313632353139633839613834666561646662626635383531353737653565663263303464396466636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727383a264726f6c65656d6f76696566746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746463617374a264726f6c65656163746f7266746172676574a26269646b6163746f723a6b65616e7567636f6e746578746b66696c6d6f677261706879a264726f6c656963686172616374657266746172676574634e656f6974696d657374616d70f958106c63726561746564576f726b7381a26269647844316532306539343164343531393536643739613432616334363566326638333262336534373930333532326663396562366233643431653038373164613339343334333066636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727382a264726f6c656763726561746f7266746172676574a26269646b6163746f723a6b65616e7567636f6e746578746c63726561746564576f726b73a264726f6c6564776f726b66746172676574a26269646c6d6f7669653a62727a726b726570726f7073a2657469746c6581a26269647844316532303166333734363036396339333133303135636563363631333836613765373636333738353537646265393537363463653631653165303531383130613436376466636c61696d73a366617574686f726c6469643a6b65793a7a426f6268706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a62727a726b7267636f6e74657874657469746c65a264726f6c656576616c7565667461726765746642525a524b526974696d657374616d70f957806963726561746564427981a26269647844316532306539343164343531393536643739613432616334363566326638333262336534373930333532326663396562366233643431653038373164613339343334333066636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727382a264726f6c656763726561746f7266746172676574a26269646b6163746f723a6b65616e7567636f6e746578746c63726561746564576f726b73a264726f6c6564776f726b66746172676574a26269646c6d6f7669653a62727a726b7267636f6e74657874696372656174656442796974696d657374616d70f958606974696d657374616d70f95860a264726f6c656963686172616374657266746172676574634e656f6974696d657374616d70f95810657469746c6581a26269647844316532303636363237616162393237346634343862626361633635633534383033386264303335653931313861336139613039613361396137663961353937323438336566636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746a546865204d61747269786974696d657374616d70f956e0"
+      },
+      {
+        name: "fix-actor-perspective",
+        spec: "SPEC-2 \xA74.8",
+        term: {
+          op: "fix",
+          schema: "ActorWithWorks",
+          entity: "actor:keanu"
+        },
+        expectedCanonicalHex: "a26269646b6163746f723a6b65616e756570726f7073a3646e616d6581a26269647844316532303533373039333433386230313930396336653137313232343230353966333866363666303839656134353431346362376464663763396564323964656432313666636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646b6163746f723a6b65616e7567636f6e74657874646e616d65a264726f6c656576616c7565667461726765746c4b65616e75205265657665736974696d657374616d70f956406b66696c6d6f67726170687981a26269647844316532303765613231666666353031633632366364623865353932646234313632353139633839613834666561646662626635383531353737653565663263303464396466636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727383a264726f6c65656d6f76696566746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746463617374a264726f6c65656163746f7266746172676574a26269646b6163746f723a6b65616e7567636f6e746578746b66696c6d6f677261706879a264726f6c656963686172616374657266746172676574634e656f6974696d657374616d70f958106c63726561746564576f726b7381a26269647844316532306539343164343531393536643739613432616334363566326638333262336534373930333532326663396562366233643431653038373164613339343334333066636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727382a264726f6c656763726561746f7266746172676574a26269646b6163746f723a6b65616e7567636f6e746578746c63726561746564576f726b73a264726f6c6564776f726b66746172676574a26269646c6d6f7669653a62727a726b726570726f7073a2657469746c6581a26269647844316532303166333734363036396339333133303135636563363631333836613765373636333738353537646265393537363463653631653165303531383130613436376466636c61696d73a366617574686f726c6469643a6b65793a7a426f6268706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a62727a726b7267636f6e74657874657469746c65a264726f6c656576616c7565667461726765746642525a524b526974696d657374616d70f957806963726561746564427981a26269647844316532306539343164343531393536643739613432616334363566326638333262336534373930333532326663396562366233643431653038373164613339343334333066636c61696d73a366617574686f726e6469643a6b65793a7a4361726f6c68706f696e7465727382a264726f6c656763726561746f7266746172676574a26269646b6163746f723a6b65616e7567636f6e746578746c63726561746564576f726b73a264726f6c6564776f726b66746172676574a26269646c6d6f7669653a62727a726b7267636f6e74657874696372656174656442796974696d657374616d70f958606974696d657374616d70f95860"
+      },
+      {
+        name: "expand-no-matching-role-is-identity",
+        spec: "SPEC-3 \xA77 (graceful degradation)",
+        term: {
+          op: "expand",
+          role: {
+            exact: "nonexistent"
+          },
+          schema: "ActorName",
+          in: {
+            op: "fix",
+            schema: "MovieBasic",
+            entity: "movie:matrix"
+          }
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a2646361737481a26269647844316532303765613231666666353031633632366364623865353932646234313632353139633839613834666561646662626635383531353737653565663263303464396466636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727383a264726f6c65656d6f76696566746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746463617374a264726f6c65656163746f7266746172676574a26269646b6163746f723a6b65616e7567636f6e746578746b66696c6d6f677261706879a264726f6c656963686172616374657266746172676574634e656f6974696d657374616d70f95810657469746c6581a26269647844316532303636363237616162393237346634343862626361633635633534383033386264303335653931313861336139613039613361396137663961353937323438336566636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746a546865204d61747269786974696d657374616d70f956e0"
+      },
+      {
+        name: "expand-skips-primitive-targets",
+        spec: "E11 (only EntityRef targets expand)",
+        note: 'c1.character targets the primitive "Neo"; role matches but the target kind does not',
+        term: {
+          op: "expand",
+          role: {
+            exact: "character"
+          },
+          schema: "ActorName",
+          in: {
+            op: "fix",
+            schema: "MovieBasic",
+            entity: "movie:matrix"
+          }
+        },
+        expectedCanonicalHex: "a26269646c6d6f7669653a6d61747269786570726f7073a2646361737481a26269647844316532303765613231666666353031633632366364623865353932646234313632353139633839613834666561646662626635383531353737653565663263303464396466636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727383a264726f6c65656d6f76696566746172676574a26269646c6d6f7669653a6d617472697867636f6e746578746463617374a264726f6c65656163746f7266746172676574a26269646b6163746f723a6b65616e7567636f6e746578746b66696c6d6f677261706879a264726f6c656963686172616374657266746172676574634e656f6974696d657374616d70f95810657469746c6581a26269647844316532303636363237616162393237346634343862626361633635633534383033386264303335653931313861336139613039613361396137663961353937323438336566636c61696d73a366617574686f726e6469643a6b65793a7a416c69636568706f696e7465727382a264726f6c65677375626a65637466746172676574a26269646c6d6f7669653a6d617472697867636f6e74657874657469746c65a264726f6c656576616c7565667461726765746a546865204d61747269786974696d657374616d70f956e0"
+      },
+      {
+        name: "fix-unknown-entity-is-empty",
+        spec: "SPEC-3 \xA77",
+        term: {
+          op: "fix",
+          schema: "MovieDeep",
+          entity: "movie:unknown"
+        },
+        expectedCanonicalHex: "a26269646d6d6f7669653a756e6b6e6f776e6570726f7073a0"
+      }
+    ]
+  };
+
+  // ../../vectors/l1-eval/eval-resolve.json
+  var eval_resolve_default = {
+    fixture: {
+      note: "superposed titles, competing ratings, mixed-type sizes, a negation, and a cast edge for nested resolution",
+      deltas: [
+        {
+          name: "t1-title-a",
+          id: "1e205eff49bb6d03d3b53b0929e8b7a965da260df95b24894aa6c381be584cf39392",
+          claims: {
+            timestamp: 100,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "title"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "The Matrix"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "t2-title-b",
+          id: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744",
+          claims: {
+            timestamp: 200,
+            author: "did:key:zBob",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "title"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "Matrix Reloaded"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "y1-year",
+          id: "1e20128fcc903f2270c79a0fe4de67be24e85dd7c95dd11b4dc25e7a939f429979c1",
+          claims: {
+            timestamp: 150,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "releaseYear"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: 1999
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "r1-rating-a",
+          id: "1e206bc56e096e5855732a2fb8c379238db9cc28b61323ae4cf05436116e73fa8f1f",
+          claims: {
+            timestamp: 500,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "rating"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: 8.7
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "r2-rating-b",
+          id: "1e2020389ed306335a0a3462af525c34b9db4bd79d79d91f61fbfcddc0af0ec1aa2d",
+          claims: {
+            timestamp: 600,
+            author: "did:key:zBob",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "rating"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: 9.1
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "g1-tag-scifi",
+          id: "1e20c6909bffb9e1b198e3421911e9b2f4482c6a042c099545e7bf4d261db0d878b8",
+          claims: {
+            timestamp: 120,
+            author: "did:key:zCarol",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "tag"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "scifi"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "g2-tag-action",
+          id: "1e20a75bf8b77f15ec02483c1c86443ccde70d1be01e7a011df22009346c4630975c",
+          claims: {
+            timestamp: 610,
+            author: "did:key:zBob",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "tag"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "action"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "s1-size-str",
+          id: "1e20a22266ce59718d14044c011026779b17e6da1ded148ee7fe01b94ba1931e82cf",
+          claims: {
+            timestamp: 700,
+            author: "did:key:zCarol",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "size"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "large"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "s2-size-num",
+          id: "1e20ae788b814e849a0c8d5c26a5ac260bf85cde7c8802f126168d0c1f72037ef487",
+          claims: {
+            timestamp: 710,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "size"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: 3
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "n1-negates-t2",
+          id: "1e204b62bb91e392af6ff668d0d8a974e6df49b722ca265f357740380532ee892c26",
+          claims: {
+            timestamp: 300,
+            author: "did:key:zBob",
+            pointers: [
+              {
+                role: "negates",
+                target: {
+                  deltaRef: {
+                    delta: "1e20b758d08491d624d45b41c48b8ccd7a84815d94f9ee227336075ac13d6a7bc744"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "a1-keanu-name",
+          id: "1e20a3819b9abb8b7b3e1bd06687fdf661d8c58496494c3bff907a62138db3983174",
+          claims: {
+            timestamp: 110,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "subject",
+                target: {
+                  entityRef: {
+                    id: "actor:keanu",
+                    context: "name"
+                  }
+                }
+              },
+              {
+                role: "value",
+                target: {
+                  value: "Keanu Reeves"
+                }
+              }
+            ]
+          }
+        },
+        {
+          name: "c1-cast",
+          id: "1e207ea21fff501c626cdb8e592db4162519c89a84feadfbbf5851577e5ef2c04d9d",
+          claims: {
+            timestamp: 130,
+            author: "did:key:zAlice",
+            pointers: [
+              {
+                role: "movie",
+                target: {
+                  entityRef: {
+                    id: "movie:matrix",
+                    context: "cast"
+                  }
+                }
+              },
+              {
+                role: "actor",
+                target: {
+                  entityRef: {
+                    id: "actor:keanu",
+                    context: "filmography"
+                  }
+                }
+              },
+              {
+                role: "character",
+                target: {
+                  value: "Neo"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    schemas: [
+      {
+        name: "MovieRaw",
+        alg: 1,
+        body: {
+          op: "group",
+          key: "byTargetContext",
+          in: {
+            op: "select",
+            pred: {
+              hasPointer: {
+                targetEntity: {
+                  var: "root"
+                }
+              }
+            },
+            in: "input"
+          }
+        }
+      },
+      {
+        name: "MovieView",
+        alg: 1,
+        body: {
+          op: "group",
+          key: "byTargetContext",
+          in: {
+            op: "select",
+            pred: {
+              hasPointer: {
+                targetEntity: {
+                  var: "root"
+                }
+              }
+            },
+            in: {
+              op: "mask",
+              policy: "drop",
+              in: "input"
+            }
+          }
+        }
+      },
+      {
+        name: "ActorNameV",
+        alg: 1,
+        body: {
+          op: "group",
+          key: "byTargetContext",
+          in: {
+            op: "select",
+            pred: {
+              hasPointer: {
+                targetEntity: {
+                  var: "root"
+                }
+              }
+            },
+            in: {
+              op: "mask",
+              policy: "drop",
+              in: "input"
+            }
+          }
+        }
+      },
+      {
+        name: "MovieCast",
+        alg: 1,
+        body: {
+          op: "expand",
+          role: {
+            exact: "actor"
+          },
+          schema: "ActorNameV",
+          in: {
+            op: "group",
+            key: "byTargetContext",
+            in: {
+              op: "select",
+              pred: {
+                hasPointer: {
+                  targetEntity: {
+                    var: "root"
+                  }
+                }
+              },
+              in: {
+                op: "mask",
+                policy: "drop",
+                in: "input"
+              }
+            }
+          }
+        }
+      }
+    ],
+    cases: [
+      {
+        name: "pick-latest-superposed",
+        spec: "SPEC-5 \xA73 pick/byTimestamp",
+        note: "no mask: both titles superposed; last-claim-wins picks Matrix Reloaded; size picks 3 (ts 710)",
+        term: {
+          op: "resolve",
+          policy: {
+            default: {
+              pick: {
+                order: {
+                  byTimestamp: "desc"
+                }
+              }
+            }
+          },
+          in: {
+            op: "fix",
+            schema: "MovieRaw",
+            entity: "movie:matrix"
+          }
+        },
+        expectedView: {
+          title: "Matrix Reloaded",
+          releaseYear: 1999,
+          rating: 9.1,
+          tag: "action",
+          size: 3,
+          cast: {
+            actor: "actor:keanu",
+            character: "Neo"
+          }
+        },
+        expectedCanonicalHex: "a66374616766616374696f6e6463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c656f4d61747269782052656c6f6164656466726174696e67fb40223333333333336b72656c6561736559656172f967cf"
+      },
+      {
+        name: "pick-latest-after-mask-drop",
+        spec: "SPEC-5 \xA74 (negation already happened upstream)",
+        note: "t2 negated by n1: title resolves to The Matrix",
+        term: {
+          op: "resolve",
+          policy: {
+            default: {
+              pick: {
+                order: {
+                  byTimestamp: "desc"
+                }
+              }
+            }
+          },
+          in: {
+            op: "fix",
+            schema: "MovieView",
+            entity: "movie:matrix"
+          }
+        },
+        expectedView: {
+          title: "The Matrix",
+          releaseYear: 1999,
+          rating: 9.1,
+          tag: "action",
+          size: 3,
+          cast: {
+            actor: "actor:keanu",
+            character: "Neo"
+          }
+        },
+        expectedCanonicalHex: "a66374616766616374696f6e6463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c656a546865204d617472697866726174696e67fb40223333333333336b72656c6561736559656172f967cf"
+      },
+      {
+        name: "pick-by-author-rank",
+        spec: "SPEC-5 \xA73 byAuthorRank (the trust primitive)",
+        term: {
+          op: "resolve",
+          policy: {
+            default: {
+              pick: {
+                order: {
+                  byAuthorRank: [
+                    "did:key:zAlice",
+                    "did:key:zBob",
+                    "did:key:zCarol"
+                  ]
+                }
+              }
+            }
+          },
+          in: {
+            op: "fix",
+            schema: "MovieRaw",
+            entity: "movie:matrix"
+          }
+        },
+        expectedView: {
+          title: "The Matrix",
+          releaseYear: 1999,
+          rating: 8.7,
+          tag: "action",
+          size: 3,
+          cast: {
+            actor: "actor:keanu",
+            character: "Neo"
+          }
+        },
+        expectedCanonicalHex: "a66374616766616374696f6e6463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c656a546865204d617472697866726174696e67fb40216666666666666b72656c6561736559656172f967cf"
+      },
+      {
+        name: "pick-by-pred-prefers-carol",
+        spec: "SPEC-5 \xA73 byPred",
+        note: "tag prefers scifi (Carol's), size prefers large (Carol's)",
+        term: {
+          op: "resolve",
+          policy: {
+            default: {
+              pick: {
+                order: {
+                  byPred: {
+                    pred: {
+                      match: {
+                        field: "author",
+                        cmp: "eq",
+                        const: "did:key:zCarol"
+                      }
+                    },
+                    then: {
+                      byTimestamp: "desc"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          in: {
+            op: "fix",
+            schema: "MovieRaw",
+            entity: "movie:matrix"
+          }
+        },
+        expectedView: {
+          title: "Matrix Reloaded",
+          releaseYear: 1999,
+          rating: 9.1,
+          tag: "scifi",
+          size: "large",
+          cast: {
+            actor: "actor:keanu",
+            character: "Neo"
+          }
+        },
+        expectedCanonicalHex: "a6637461676573636966696463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65656c61726765657469746c656f4d61747269782052656c6f6164656466726174696e67fb40223333333333336b72656c6561736559656172f967cf"
+      },
+      {
+        name: "all-ascending",
+        spec: "SPEC-5 \xA73 all",
+        term: {
+          op: "resolve",
+          policy: {
+            props: {
+              tag: {
+                all: {
+                  order: {
+                    byTimestamp: "asc"
+                  }
+                }
+              }
+            },
+            default: {
+              pick: {
+                order: {
+                  byTimestamp: "desc"
+                }
+              }
+            }
+          },
+          in: {
+            op: "fix",
+            schema: "MovieRaw",
+            entity: "movie:matrix"
+          }
+        },
+        expectedView: {
+          tag: [
+            "scifi",
+            "action"
+          ],
+          title: "Matrix Reloaded",
+          releaseYear: 1999,
+          rating: 9.1,
+          size: 3,
+          cast: {
+            actor: "actor:keanu",
+            character: "Neo"
+          }
+        },
+        expectedCanonicalHex: "a6637461678265736369666966616374696f6e6463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c656f4d61747269782052656c6f6164656466726174696e67fb40223333333333336b72656c6561736559656172f967cf"
+      },
+      {
+        name: "merge-max-min-sum-count",
+        spec: "SPEC-5 \xA73 MergeFn / ERRATA-5 R2",
+        note: "sum folds in id order (8.7+9.1); size max is the STRING large by canonical type order",
+        term: {
+          op: "resolve",
+          policy: {
+            props: {
+              rating: {
+                merge: "sum"
+              },
+              tag: {
+                merge: "count"
+              },
+              size: {
+                merge: "max"
+              },
+              releaseYear: {
+                merge: "min"
+              }
+            },
+            default: {
+              pick: {
+                order: {
+                  byTimestamp: "desc"
+                }
+              }
+            }
+          },
+          in: {
+            op: "fix",
+            schema: "MovieRaw",
+            entity: "movie:matrix"
+          }
+        },
+        expectedView: {
+          rating: 17.799999999999997,
+          tag: 2,
+          size: "large",
+          releaseYear: 1999,
+          title: "Matrix Reloaded",
+          cast: {
+            actor: "actor:keanu",
+            character: "Neo"
+          }
+        },
+        expectedCanonicalHex: "a663746167f940006463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65656c61726765657469746c656f4d61747269782052656c6f6164656466726174696e67fb4031cccccccccccc6b72656c6561736559656172f967cf"
+      },
+      {
+        name: "merge-concat-sorted",
+        spec: "SPEC-5 \xA73 MergeFn",
+        term: {
+          op: "resolve",
+          policy: {
+            props: {
+              tag: {
+                merge: "concatSorted"
+              }
+            },
+            default: {
+              pick: {
+                order: {
+                  byTimestamp: "desc"
+                }
+              }
+            }
+          },
+          in: {
+            op: "fix",
+            schema: "MovieRaw",
+            entity: "movie:matrix"
+          }
+        },
+        expectedView: {
+          tag: [
+            "action",
+            "scifi"
+          ],
+          title: "Matrix Reloaded",
+          releaseYear: 1999,
+          rating: 9.1,
+          size: 3,
+          cast: {
+            actor: "actor:keanu",
+            character: "Neo"
+          }
+        },
+        expectedCanonicalHex: "a6637461678266616374696f6e6573636966696463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c656f4d61747269782052656c6f6164656466726174696e67fb40223333333333336b72656c6561736559656172f967cf"
+      },
+      {
+        name: "conflicts-surfaces-disagreement",
+        spec: "SPEC-5 \xA73 conflicts",
+        note: "title has 2 distinct claims -> surfaced; releaseYear has 1 -> absent",
+        term: {
+          op: "resolve",
+          policy: {
+            props: {
+              title: {
+                conflicts: {
+                  order: {
+                    byTimestamp: "desc"
+                  }
+                }
+              },
+              releaseYear: {
+                conflicts: {
+                  order: {
+                    byTimestamp: "desc"
+                  }
+                }
+              }
+            },
+            default: {
+              pick: {
+                order: {
+                  byTimestamp: "desc"
+                }
+              }
+            }
+          },
+          in: {
+            op: "fix",
+            schema: "MovieRaw",
+            entity: "movie:matrix"
+          }
+        },
+        expectedView: {
+          title: [
+            "Matrix Reloaded",
+            "The Matrix"
+          ],
+          rating: 9.1,
+          tag: "action",
+          size: 3,
+          cast: {
+            actor: "actor:keanu",
+            character: "Neo"
+          }
+        },
+        expectedCanonicalHex: "a56374616766616374696f6e6463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c65826f4d61747269782052656c6f616465646a546865204d617472697866726174696e67fb4022333333333333"
+      },
+      {
+        name: "absent-as-default",
+        spec: "SPEC-5 \xA73 absentAs / \xA74 empty property",
+        note: "no director deltas exist; the policy names the property so absentAs fires",
+        term: {
+          op: "resolve",
+          policy: {
+            props: {
+              director: {
+                absentAs: {
+                  const: "unknown",
+                  then: {
+                    pick: {
+                      order: {
+                        byTimestamp: "desc"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            default: {
+              pick: {
+                order: {
+                  byTimestamp: "desc"
+                }
+              }
+            }
+          },
+          in: {
+            op: "fix",
+            schema: "MovieRaw",
+            entity: "movie:matrix"
+          }
+        },
+        expectedView: {
+          director: "unknown",
+          title: "Matrix Reloaded",
+          releaseYear: 1999,
+          rating: 9.1,
+          tag: "action",
+          size: 3,
+          cast: {
+            actor: "actor:keanu",
+            character: "Neo"
+          }
+        },
+        expectedCanonicalHex: "a76374616766616374696f6e6463617374a2656163746f726b6163746f723a6b65616e7569636861726163746572634e656f6473697a65f94200657469746c656f4d61747269782052656c6f6164656466726174696e67fb4022333333333333686469726563746f7267756e6b6e6f776e6b72656c6561736559656172f967cf"
+      },
+      {
+        name: "resolve-nested-expansion",
+        spec: "ERRATA-5 R1/R6 (multi-pointer candidate; nested View with same policy)",
+        note: "cast candidate is {actor: {name: Keanu Reeves}, character: Neo}",
+        term: {
+          op: "resolve",
+          policy: {
+            default: {
+              pick: {
+                order: {
+                  byTimestamp: "desc"
+                }
+              }
+            }
+          },
+          in: {
+            op: "fix",
+            schema: "MovieCast",
+            entity: "movie:matrix"
+          }
+        },
+        expectedView: {
+          title: "The Matrix",
+          releaseYear: 1999,
+          rating: 9.1,
+          tag: "action",
+          size: 3,
+          cast: {
+            actor: {
+              name: "Keanu Reeves",
+              filmography: {
+                movie: "movie:matrix",
+                character: "Neo"
+              }
+            },
+            character: "Neo"
+          }
+        },
+        expectedCanonicalHex: "a66374616766616374696f6e6463617374a2656163746f72a2646e616d656c4b65616e75205265657665736b66696c6d6f677261706879a2656d6f7669656c6d6f7669653a6d617472697869636861726163746572634e656f69636861726163746572634e656f6473697a65f94200657469746c656a546865204d617472697866726174696e67fb40223333333333336b72656c6561736559656172f967cf"
+      }
+    ]
+  };
+
   // demo/tour/tour.ts
   function el(tag, attrs = {}, ...children) {
     const node = document.createElement(tag);
@@ -4352,6 +7478,153 @@ replayed digest  ${replayed.slice(4, 36)}\u2026
       flash(out);
     };
   }
+  var tryCase = (name, check) => {
+    try {
+      return { name, pass: check() };
+    } catch {
+      return { name, pass: false };
+    }
+  };
+  function evalSuite(label, file, doc) {
+    const set = DeltaSet.from(doc.fixture.deltas.map((d) => makeDelta(parseClaims(d.claims))));
+    const registry = doc.schemas === void 0 ? void 0 : SchemaRegistry.build(
+      doc.schemas.map((s) => ({ name: s.name, alg: s.alg, body: parseTerm(s.body) }))
+    );
+    const cases = [
+      tryCase(
+        "fixture ids are pinned",
+        () => doc.fixture.deltas.every((d) => makeDelta(parseClaims(d.claims)).id === d.id)
+      ),
+      ...doc.cases.map(
+        (c) => tryCase(c.name, () => {
+          const result = evalTerm(parseTerm(c.term), set, c.root, registry);
+          return resultCanonicalHex(result) === c.expectedCanonicalHex;
+        })
+      )
+    ];
+    return { label, file, cases };
+  }
+  function runConformance() {
+    const keys = keys_default;
+    const deltas = deltas_default;
+    const signed = deltas_signed_default;
+    const setDigest = set_digest_default;
+    return [
+      {
+        label: "canonical CBOR bytes + content addresses",
+        file: "vectors/l0-delta/deltas.json",
+        cases: deltas.map(
+          (v) => tryCase(v.name, () => {
+            const claims = parseClaims(v.claims);
+            return canonicalHex(claims) === v.canonicalCborHex && computeId(claims) === v.id;
+          })
+        )
+      },
+      {
+        label: "Ed25519 keys derive from pinned seeds",
+        file: "vectors/keys/keys.json",
+        cases: keys.map(
+          (k) => tryCase(k.keyId, () => {
+            return publicKeyFromSeed(k.seedHex) === k.publicKeyHex && k.author === `ed25519:${k.publicKeyHex}`;
+          })
+        )
+      },
+      {
+        label: "deterministic signatures, verification, tamper-rejection",
+        file: "vectors/l0-delta/deltas-signed.json",
+        cases: signed.map(
+          (v) => tryCase(v.name, () => {
+            const key = keys.find((k) => k.keyId === v.keyId);
+            if (key === void 0) return false;
+            const claims = parseClaims(v.claims);
+            const resigned = signClaims(claims, key.seedHex);
+            const tampered = verifyDelta({
+              id: resigned.id,
+              claims: { ...claims, timestamp: claims.timestamp + 1 },
+              sig: resigned.sig ?? ""
+            });
+            return canonicalHex(claims) === v.canonicalCborHex && computeId(claims) === v.id && resigned.sig === v.sig && verifyDelta(resigned) === "verified" && tampered === "invalid";
+          })
+        )
+      },
+      {
+        label: "delta-set digest (order-independent)",
+        file: "vectors/l0-delta/set-digest.json",
+        cases: [
+          tryCase("set of all deltas.json vectors", () => {
+            const s = DeltaSet.from(deltas.map((v) => makeDelta(parseClaims(v.claims))));
+            return JSON.stringify(s.ids()) === JSON.stringify(setDigest.ids) && s.digest() === setDigest.digest;
+          })
+        ]
+      },
+      evalSuite(
+        "evaluator: select / union / mask",
+        "vectors/l1-eval/eval-basic.json",
+        eval_basic_default
+      ),
+      evalSuite(
+        "evaluator: group / prune (HyperViews)",
+        "vectors/l1-eval/eval-hview.json",
+        eval_hview_default
+      ),
+      evalSuite(
+        "evaluator: expand / fix (schemas)",
+        "vectors/l1-eval/eval-expand.json",
+        eval_expand_default
+      ),
+      evalSuite(
+        "evaluator: resolve (policies \u2192 Views)",
+        "vectors/l1-eval/eval-resolve.json",
+        eval_resolve_default
+      )
+    ];
+  }
+  function widgetConformance() {
+    const host = $("w-conformance");
+    const btn = el("button", { class: "big" }, "\u25B6 re-run the vectors");
+    const out = el("div", { class: "suites" });
+    const run = () => {
+      const t0 = performance.now();
+      const suites = runConformance();
+      const ms = Math.max(1, Math.round(performance.now() - t0));
+      out.replaceChildren();
+      let pass = 0;
+      let total = 0;
+      for (const s of suites) {
+        const ok = s.cases.filter((c) => c.pass).length;
+        pass += ok;
+        total += s.cases.length;
+        const row = el(
+          "div",
+          { class: "entry" },
+          el(
+            "span",
+            { class: ok === s.cases.length ? "val" : "error" },
+            ok === s.cases.length ? "\u2713 " : "\u2717 "
+          ),
+          `${s.label} \u2014 ${ok}/${s.cases.length} `,
+          el("span", { class: "meta mono" }, s.file)
+        );
+        if (ok !== s.cases.length) {
+          for (const c of s.cases.filter((x) => !x.pass)) {
+            row.append(el("div", { class: "error" }, `  \u2717 ${c.name}`));
+          }
+        }
+        out.append(row);
+      }
+      out.append(
+        el(
+          "div",
+          { class: pass === total ? "ok" : "error", style: "margin-top:0.8em" },
+          pass === total ? `\u2713 ${pass}/${total} green in ${ms} ms \u2014 your browser is now a conformance witness.` : `\u2717 ${pass}/${total} \u2014 a vector failed; this page is out of sync with the suite.`
+        )
+      );
+      flash(out);
+    };
+    btn.onclick = run;
+    host.append(out, btn);
+    run();
+  }
   function renderStats() {
     const n = A.alice.reactor.size + A.bob.reactor.size + B.pat.reactor.size + B.quinn.reactor.size;
     $("live-stats").textContent = `${n} signed deltas currently live in this tab \u2014 authored, hashed, and verified by the real implementation.`;
@@ -4361,6 +7634,7 @@ replayed digest  ${replayed.slice(4, 36)}\u2026
   widgetHistory();
   widgetFederation();
   widgetReplay();
+  widgetConformance();
   refreshWorldA();
 })();
 /*! Bundled license information:

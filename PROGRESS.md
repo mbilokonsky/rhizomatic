@@ -233,6 +233,12 @@ plus polish (README status update, top-level parity runner, CI).
   briefly true again, end of slider respects it. (2) §6's peers are now Obi-Wan and Vader with
   divergent claims about person:anakin_skywalker ("a certain point of view" — the aside ties
   the quote to policies-as-perspectives); replaces the opaque rover example. Verified live.
+- **The stack map + the last layer's widget** ✅ — the hero now ends in an 8-row L0→L7 map:
+  each layer links to the tour section that runs it live and to its spec doc ("click a layer
+  to see it run; click a spec to read the law"). And L0 stopped being the one undemoed layer:
+  §6 gained the pack widget — pack Obi-Wan's world to canonical CBOR (one item, deterministic
+  packId), unpack into a fresh set, digest IDENTICAL, self-verifying rehydration. Every layer
+  of the architecture now executes on the page. Verified live; zero console errors.
 - **GitHub Pages** — blocked on a permission: needs the human to enable Pages (main, /docs)
   in repo settings; README already points at https://mbilokonsky.github.io/rhizomatic/.
 

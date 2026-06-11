@@ -147,6 +147,99 @@
     return sink.toUint8Array();
   }
   var utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+  var ByteReader = class {
+    constructor(bytes) {
+      this.bytes = bytes;
+    }
+    bytes;
+    pos = 0;
+    u8() {
+      if (this.pos >= this.bytes.length) throw new Error("cbor: unexpected end of input");
+      return this.bytes[this.pos++];
+    }
+    take(n) {
+      if (this.pos + n > this.bytes.length) throw new Error("cbor: unexpected end of input");
+      const out = this.bytes.subarray(this.pos, this.pos + n);
+      this.pos += n;
+      return out;
+    }
+    done() {
+      return this.pos === this.bytes.length;
+    }
+  };
+  function readLength(r, info) {
+    if (info < 24) return info;
+    if (info === 24) return r.u8();
+    if (info === 25) return r.u8() << 8 | r.u8();
+    if (info === 26) return (r.u8() << 24 | r.u8() << 16 | r.u8() << 8 | r.u8()) >>> 0;
+    throw new Error(`cbor: unsupported length encoding (info ${info})`);
+  }
+  function f16BitsToNumber(bits) {
+    const sign = bits & 32768 ? -1 : 1;
+    const exp = bits >> 10 & 31;
+    const mant = bits & 1023;
+    if (exp === 0) return sign * mant * 2 ** -24;
+    if (exp === 31) throw new Error("cbor: non-finite f16 is not representable");
+    return sign * (1 + mant / 1024) * 2 ** (exp - 15);
+  }
+  function decodeItem(r) {
+    const head = r.u8();
+    const major = head >> 5;
+    const info = head & 31;
+    switch (major) {
+      case 3: {
+        const len = readLength(r, info);
+        return tstr(utf8Decoder.decode(r.take(len)));
+      }
+      case 4: {
+        const len = readLength(r, info);
+        const items = [];
+        for (let i = 0; i < len; i++) items.push(decodeItem(r));
+        return array(items);
+      }
+      case 5: {
+        const len = readLength(r, info);
+        const entries = [];
+        for (let i = 0; i < len; i++) {
+          const key = decodeItem(r);
+          if (key.t !== "tstr") throw new Error("cbor: map keys must be text strings");
+          entries.push([key.v, decodeItem(r)]);
+        }
+        return map(entries);
+      }
+      case 7: {
+        if (info === 20) return bool(false);
+        if (info === 21) return bool(true);
+        if (info === 25) {
+          const b = r.take(2);
+          return float(f16BitsToNumber(b[0] << 8 | b[1]));
+        }
+        if (info === 26) {
+          const b = r.take(4);
+          const dv = new DataView(b.buffer, b.byteOffset, 4);
+          const n = dv.getFloat32(0);
+          if (!Number.isFinite(n)) throw new Error("cbor: non-finite float is not representable");
+          return float(n);
+        }
+        if (info === 27) {
+          const b = r.take(8);
+          const dv = new DataView(b.buffer, b.byteOffset, 8);
+          const n = dv.getFloat64(0);
+          if (!Number.isFinite(n)) throw new Error("cbor: non-finite float is not representable");
+          return float(n);
+        }
+        throw new Error(`cbor: unsupported simple/float (info ${info})`);
+      }
+      default:
+        throw new Error(`cbor: major type ${major} is outside the Rhizomatic profile`);
+    }
+  }
+  function decode(bytes) {
+    const r = new ByteReader(bytes);
+    const v = decodeItem(r);
+    if (!r.done()) throw new Error("cbor: trailing bytes after item");
+    return v;
+  }
 
   // node_modules/@noble/hashes/esm/crypto.js
   var crypto = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;
@@ -4260,6 +4353,205 @@
     return true;
   }
 
+  // src/pack.ts
+  var PACK_VERSION = 1;
+  function stringsOf(delta, out) {
+    out.add(delta.id);
+    out.add(delta.claims.author);
+    if (delta.sig !== void 0) out.add(delta.sig);
+    for (const p of delta.claims.pointers) {
+      out.add(p.role);
+      switch (p.target.kind) {
+        case "entity":
+          out.add(p.target.entity.id);
+          if (p.target.entity.context !== void 0) out.add(p.target.entity.context);
+          break;
+        case "delta":
+          out.add(p.target.deltaRef.delta);
+          if (p.target.deltaRef.context !== void 0) out.add(p.target.deltaRef.context);
+          break;
+        case "primitive":
+          if (typeof p.target.value === "string") out.add(p.target.value);
+          break;
+      }
+    }
+  }
+  function ptrToCbor(p, idx) {
+    const entries = [["r", float(idx(p.role))]];
+    let context;
+    switch (p.target.kind) {
+      case "entity":
+        entries.push(["e", float(idx(p.target.entity.id))]);
+        context = p.target.entity.context;
+        break;
+      case "delta":
+        entries.push(["d", float(idx(p.target.deltaRef.delta))]);
+        context = p.target.deltaRef.context;
+        break;
+      case "primitive": {
+        const v = p.target.value;
+        if (typeof v === "string") entries.push(["s", float(idx(v))]);
+        else if (typeof v === "number") entries.push(["n", float(v)]);
+        else entries.push(["b", bool(v)]);
+        break;
+      }
+    }
+    if (context !== void 0) entries.push(["c", float(idx(context))]);
+    return map(entries);
+  }
+  function hydratedRecord(d, idx) {
+    const entries = [
+      ["i", float(idx(d.id))],
+      ["a", float(idx(d.claims.author))],
+      ["t", float(d.claims.timestamp)],
+      ["p", array(d.claims.pointers.map((p) => ptrToCbor(p, idx)))]
+    ];
+    if (d.sig !== void 0) entries.push(["s", float(idx(d.sig))]);
+    return map(entries);
+  }
+  function memberRecord(d, manifest, envelopeIdx, idx) {
+    const entries = [
+      ["i", float(idx(d.id))],
+      ["m", float(envelopeIdx)],
+      ["p", array(d.claims.pointers.map((p) => ptrToCbor(p, idx)))]
+    ];
+    if (d.claims.author !== manifest.claims.author) entries.push(["a", float(idx(d.claims.author))]);
+    const dt = d.claims.timestamp - manifest.claims.timestamp;
+    if (dt !== 0) entries.push(["dt", float(dt)]);
+    if (d.sig !== void 0) entries.push(["s", float(idx(d.sig))]);
+    return map(entries);
+  }
+  function packSet(set) {
+    const deltas = [...set].sort((a, b) => a.id < b.id ? -1 : 1);
+    const manifests = deltas.filter((d) => manifestMemberIds(d).length > 0);
+    const memberToManifest = /* @__PURE__ */ new Map();
+    manifests.forEach((m, i) => {
+      for (const id of manifestMemberIds(m)) {
+        if (set.has(id) && !memberToManifest.has(id)) memberToManifest.set(id, i);
+      }
+    });
+    const manifestIds = new Set(manifests.map((m) => m.id));
+    const members = deltas.filter((d) => memberToManifest.has(d.id) && !manifestIds.has(d.id));
+    const loose = deltas.filter((d) => !memberToManifest.has(d.id) && !manifestIds.has(d.id));
+    const stringSet = /* @__PURE__ */ new Set();
+    for (const d of deltas) stringsOf(d, stringSet);
+    const strings = [...stringSet].sort();
+    const indexOf = new Map(strings.map((s, i) => [s, i]));
+    const idx = (s) => indexOf.get(s);
+    const packed = map([
+      ["version", float(PACK_VERSION)],
+      ["strings", array(strings.map(tstr))],
+      ["envelopes", array(manifests.map((m) => hydratedRecord(m, idx)))],
+      [
+        "members",
+        array(
+          members.map(
+            (d) => memberRecord(
+              d,
+              manifests[memberToManifest.get(d.id)],
+              memberToManifest.get(d.id),
+              idx
+            )
+          )
+        )
+      ],
+      ["loose", array(loose.map((d) => hydratedRecord(d, idx)))]
+    ]);
+    return encode(packed);
+  }
+  function packId(bytes) {
+    return contentAddress(bytes);
+  }
+  function asMap(v, what) {
+    if (v.t !== "map") throw new Error(`pack: expected map for ${what}`);
+    return new Map(v.v);
+  }
+  function asArray(v, what) {
+    if (v === void 0 || v.t !== "array") throw new Error(`pack: expected array for ${what}`);
+    return v.v;
+  }
+  function asNum(v, what) {
+    if (v === void 0 || v.t !== "float") throw new Error(`pack: expected number for ${what}`);
+    return v.v;
+  }
+  function ptrFromCbor(v, strings) {
+    const o = asMap(v, "pointer");
+    const str = (key) => strings[asNum(o.get(key), key)];
+    const role = str("r");
+    const context = o.has("c") ? str("c") : void 0;
+    let target;
+    if (o.has("e")) {
+      target = {
+        kind: "entity",
+        entity: context === void 0 ? { id: str("e") } : { id: str("e"), context }
+      };
+    } else if (o.has("d")) {
+      target = {
+        kind: "delta",
+        deltaRef: context === void 0 ? { delta: str("d") } : { delta: str("d"), context }
+      };
+    } else if (o.has("s")) {
+      target = { kind: "primitive", value: str("s") };
+    } else if (o.has("n")) {
+      target = { kind: "primitive", value: asNum(o.get("n"), "n") };
+    } else if (o.has("b")) {
+      const b = o.get("b");
+      if (b.t !== "bool") throw new Error("pack: expected bool for b");
+      target = { kind: "primitive", value: b.v };
+    } else {
+      throw new Error("pack: pointer record has no target");
+    }
+    return { role, target };
+  }
+  function hydrateRecord(v, strings) {
+    const o = asMap(v, "record");
+    const claims = {
+      author: strings[asNum(o.get("a"), "a")],
+      timestamp: asNum(o.get("t"), "t"),
+      pointers: asArray(o.get("p"), "p").map((p) => ptrFromCbor(p, strings))
+    };
+    const sig = o.has("s") ? strings[asNum(o.get("s"), "s")] : void 0;
+    return verifiedDelta(claims, sig, strings[asNum(o.get("i"), "i")]);
+  }
+  function verifiedDelta(claims, sig, storedId) {
+    const d = makeDelta(claims, sig);
+    if (d.id !== storedId) {
+      throw new Error(`pack: rehydrated delta ${d.id} does not match stored id ${storedId}`);
+    }
+    return d;
+  }
+  function unpackSet(bytes) {
+    const top = asMap(decode(bytes), "pack");
+    if (asNum(top.get("version"), "version") !== PACK_VERSION) {
+      throw new Error("pack: unsupported version");
+    }
+    const strings = asArray(top.get("strings"), "strings").map((s) => {
+      if (s.t !== "tstr") throw new Error("pack: string table entries must be text");
+      return s.v;
+    });
+    const out = new DeltaSet();
+    const envelopes = asArray(top.get("envelopes"), "envelopes").map(
+      (e) => hydrateRecord(e, strings)
+    );
+    for (const m of envelopes) out.add(m);
+    for (const rec of asArray(top.get("members"), "members")) {
+      const o = asMap(rec, "member");
+      const manifest = envelopes[asNum(o.get("m"), "m")];
+      if (manifest === void 0) throw new Error("pack: member references missing envelope");
+      const author = o.has("a") ? strings[asNum(o.get("a"), "a")] : manifest.claims.author;
+      const timestamp = manifest.claims.timestamp + (o.has("dt") ? asNum(o.get("dt"), "dt") : 0);
+      const claims = {
+        author,
+        timestamp,
+        pointers: asArray(o.get("p"), "p").map((p) => ptrFromCbor(p, strings))
+      };
+      const sig = o.has("s") ? strings[asNum(o.get("s"), "s")] : void 0;
+      out.add(verifiedDelta(claims, sig, strings[asNum(o.get("i"), "i")]));
+    }
+    for (const rec of asArray(top.get("loose"), "loose")) out.add(hydrateRecord(rec, strings));
+    return out;
+  }
+
   // src/peer.ts
   var ALL = { kind: "input" };
   var Peer = class {
@@ -7850,6 +8142,21 @@ replayed digest  ${replayed.slice(4, 36)}\u2026
     rustReady.push(run);
     run();
   }
+  function widgetPack() {
+    const btn = $("w-pack-btn");
+    const out = $("w-pack-out");
+    btn.onclick = () => {
+      const snapshot = B.kenobi.reactor.snapshot();
+      const bytes = packSet(snapshot);
+      const restored = unpackSet(bytes);
+      const match = restored.digest() === snapshot.digest();
+      out.textContent = `packed ${snapshot.size} deltas \u2192 ${bytes.length} bytes of canonical CBOR
+packId   ${packId(bytes).slice(0, 32)}\u2026  (same set \u21D2 same bytes \u21D2 same id)
+unpacked \u2192 ${restored.size} deltas, digest ${match ? "IDENTICAL" : "MISMATCH"}
+` + (match ? "\u2713 rehydration is self-verifying \u2014 a corrupted pack fails, loudly." : "\u2717 round-trip diverged \u2014 file a bug, this is a P0");
+      flash(out);
+    };
+  }
   function widgetDerivation() {
     const host = $("w-derivation");
     const root = "movie:blade_runner";
@@ -8013,6 +8320,7 @@ replayed digest  ${replayed.slice(4, 36)}\u2026
   widgetHistory();
   widgetFederation();
   widgetReplay();
+  widgetPack();
   widgetDerivation();
   widgetConformance();
   refreshWorldA();

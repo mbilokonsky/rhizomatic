@@ -12,6 +12,7 @@ import {
 import { evalTerm, resultCanonicalHex } from "../../src/eval.js";
 import type { HView } from "../../src/hview.js";
 import { claimsToJson, parseClaims } from "../../src/json-profile.js";
+import { packId, packSet, unpackSet } from "../../src/pack.js";
 import { Peer, syncBoth } from "../../src/peer.js";
 import { resolveView, type Policy, type View } from "../../src/policy.js";
 import { Reactor } from "../../src/reactor.js";
@@ -1043,6 +1044,27 @@ function widgetConformance(): void {
   run();
 }
 
+// --- §6c packs: the bytes at rest -------------------------------------------------------------------
+
+function widgetPack(): void {
+  const btn = $("w-pack-btn");
+  const out = $("w-pack-out");
+  btn.onclick = () => {
+    const snapshot = B.kenobi.reactor.snapshot();
+    const bytes = packSet(snapshot);
+    const restored = unpackSet(bytes);
+    const match = restored.digest() === snapshot.digest();
+    out.textContent =
+      `packed ${snapshot.size} deltas → ${bytes.length} bytes of canonical CBOR\n` +
+      `packId   ${packId(bytes).slice(0, 32)}…  (same set ⇒ same bytes ⇒ same id)\n` +
+      `unpacked → ${restored.size} deltas, digest ${match ? "IDENTICAL" : "MISMATCH"}\n` +
+      (match
+        ? "✓ rehydration is self-verifying — a corrupted pack fails, loudly."
+        : "✗ round-trip diverged — file a bug, this is a P0");
+    flash(out);
+  };
+}
+
 // --- §7 computation is an author -------------------------------------------------------------------
 
 function widgetDerivation(): void {
@@ -1245,6 +1267,7 @@ widgetSuperposition();
 widgetHistory();
 widgetFederation();
 widgetReplay();
+widgetPack();
 widgetDerivation();
 widgetConformance();
 refreshWorldA();

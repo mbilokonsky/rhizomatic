@@ -63,6 +63,29 @@ Primitive = string | number | boolean
 
 The legacy design carried a `system` UUID identifying the originating instance. Under the portable-format framing this is machine-coupled identity and is **removed from the core**. Provenance of *transport* (which instance relayed this delta) is a federation-layer concern (SPEC-6) and MAY be tracked as annotation deltas. Provenance of *assertion* is `author`, which is cryptographic (§5).
 
+### 2.3 Context is the backpointer's name — and its consent
+
+A delta is readable from the perspective of **any** entity it points at; there is no privileged
+subject. What `context` does is name the property under which the delta files itself *at that
+target* when the target is queried. The same delta may carry a different context on each of its
+entity pointers — a purchase filing under `purchases` at the buyer and `sales` at the seller —
+and the relation's full payload at any vertex is composed from the *other* pointers'
+role/target pairs (pinned at L5, ERRATA-5 R1).
+
+Three consequences, all deliberate:
+
+- **A missing context means no backpointer.** The reference still exists — the delta still
+  matches predicates, still travels, still names the entity — but the target's view does not
+  grow a property for it. Backpointers are consent, granted per pointer at write time. (Pinned
+  at L2 as *contextless exclusion*, ERRATA-2 E6.)
+- **Primitives are not vertices.** A bare string or number carries no context slot at all —
+  there is no "perspective of the number 3" to file under. If a value needs a perspective,
+  promote it to an entity.
+- **The author's context is the default reading, not a cage.** Filing is an L2 operator
+  parameter (`group` keys, SPEC-2 §4.4): `byTargetContext` defers to the author's naming, but a
+  schema MAY impose its own filing — group by the role the root plays, or bag everything under
+  a constant property. Semantics travel as payload; lenses stay sovereign.
+
 ## 3. Atomicity
 
 A delta is the unit of acceptance and negation. You take all of its pointers or negate all of them. Therefore **delta granularity is a modeling decision made at write time**:

@@ -196,6 +196,18 @@ plus polish (README status update, top-level parity runner, CI).
   BOTH witnesses side by side: 117/117 green in ~90 ms in-browser. CI builds + clippy-checks
   the wasm target on every push. Verified live: edits agree, suites green, zero console
   errors, graceful degradation if the wasm fails to load.
+- **The native idiom restored (design review with the user, 2026-06-11)** ✅ — the user flagged
+  the demos' "subject"/"value" role cosplay. Investigation confirmed the FORMAT was always
+  faithful (no subject anywhere normative; primitives encode directly; kind never on the wire)
+  and the user's clarified intent — context names the property at the target, missing context
+  = no backpointer, schemas may override filing — is exactly E6 contextless exclusion +
+  byTargetContext/byRole/const + R1 value composition, all pinned and vectored. New SPEC-1
+  §2.3 writes the rationale down (backpointers are consent; primitives are not vertices; the
+  author's context is the default reading, not a cage). Tour rebuilt: §1 shows the JSON debug
+  profile and native roles; NEW §2 "Every pointer is a perspective" — one delta, two live
+  views, clear a context and watch that vertex's backpointer vanish; all seed worlds
+  de-cosplayed. Verified in-browser; 117/117 conformance unchanged. Playground de-cosplay
+  queued next.
 - **GitHub Pages** — blocked on a permission: needs the human to enable Pages (main, /docs)
   in repo settings; README already points at https://mbilokonsky.github.io/rhizomatic/.
 

@@ -7075,12 +7075,13 @@
     node.classList.add("flash");
   }
   function valueOf(claims) {
-    const p = claims.pointers.find((x) => x.role === "value");
-    if (p !== void 0 && p.target.kind === "primitive") {
+    const neg = claims.pointers.find((x) => x.role === "negates");
+    if (neg !== void 0) return "(retraction)";
+    const p = claims.pointers.find((x) => x.target.kind === "primitive");
+    if (p !== void 0) {
       return JSON.stringify(p.target.value);
     }
-    const neg = claims.pointers.find((x) => x.role === "negates");
-    return neg !== void 0 ? "(retraction)" : "(edge)";
+    return "(edge)";
   }
   function parseValue(raw) {
     const n = Number(raw);
@@ -7091,6 +7092,7 @@
     const author = el("input", { value: "alice" });
     const ts = el("input", { value: "1", type: "number" });
     const entity = el("input", { value: "movie:blade_runner" });
+    const role = el("input", { value: "movie" });
     const prop = el("input", { value: "director" });
     const val = el("input", { value: "Ridley Scott" });
     const claimsOut = el("pre", { class: "code" });
@@ -7105,13 +7107,13 @@
         timestamp: Number(ts.value),
         pointers: [
           {
-            role: "subject",
+            role: role.value,
             target: { kind: "entity", entity: { id: entity.value, context: prop.value } }
           },
-          { role: "value", target: { kind: "primitive", value: parseValue(val.value) } }
+          { role: prop.value, target: { kind: "primitive", value: parseValue(val.value) } }
         ]
       };
-      claimsOut.textContent = JSON.stringify(claims, null, 2);
+      claimsOut.textContent = JSON.stringify(claimsToJson(claims), null, 2);
       try {
         const hex = canonicalHex(claims);
         bytesOut.textContent = hex.replace(/(..)/g, "$1 ").trimEnd();
@@ -7143,10 +7145,11 @@
         labeled("author", author),
         labeled("timestamp", ts),
         labeled("entity", entity),
-        labeled("property", prop),
+        labeled("its role", role),
+        labeled("property (context)", prop),
         labeled("value", val)
       ),
-      el("div", { class: "panel-title" }, "the claims, as data"),
+      el("div", { class: "panel-title" }, "the claims, as data (JSON debug profile)"),
       claimsOut,
       el("div", { class: "panel-title" }, "canonical bytes"),
       bytesOut,
@@ -7156,8 +7159,88 @@
       rustLine,
       err
     );
-    for (const i of [author, ts, entity, prop, val]) i.addEventListener("input", render);
+    for (const i of [author, ts, entity, role, prop, val]) i.addEventListener("input", render);
     rustReady.push(render);
+    render();
+  }
+  function widgetPerspectives() {
+    const host = $("w-perspectives");
+    const leftId = el("input", { value: "movie:blade_runner" });
+    const leftCtx = el("input", { value: "director" });
+    const rightId = el("input", { value: "person:ridley_scott" });
+    const rightCtx = el("input", { value: "movies" });
+    const deltaOut = el("pre", { class: "code" });
+    const idOut = el("div", { class: "meta mono" });
+    const leftPane = el("pre", { class: "code" });
+    const rightPane = el("pre", { class: "code" });
+    const leftTitle = el("div", { class: "panel-title" });
+    const rightTitle = el("div", { class: "panel-title" });
+    const err = el("div", { class: "error" });
+    const VIEW_TERM = parseTerm({
+      op: "group",
+      key: "byTargetContext",
+      in: { op: "mask", policy: "drop", in: "input" }
+    });
+    const LATEST = parsePolicy({ default: { pick: { order: { byTimestamp: "desc" } } } });
+    const paneFor = (set, root) => {
+      const result = evalTerm(VIEW_TERM, set, root);
+      if (result.sort !== "hview") return "(not an hview)";
+      const view = resolveView(LATEST, result.hview);
+      return Object.keys(view).length === 0 ? "{}  \u2190 no backpointer. The reference exists;\n    the property was never granted." : JSON.stringify(view, null, 2);
+    };
+    const render = () => {
+      const entityRef = (id, ctx) => ctx === "" ? { id } : { id, context: ctx };
+      const claims = {
+        author: "alice",
+        timestamp: 1,
+        pointers: [
+          {
+            role: "movie",
+            target: { kind: "entity", entity: entityRef(leftId.value, leftCtx.value) }
+          },
+          {
+            role: "director",
+            target: { kind: "entity", entity: entityRef(rightId.value, rightCtx.value) }
+          }
+        ]
+      };
+      deltaOut.textContent = JSON.stringify(claimsToJson(claims), null, 2);
+      try {
+        const delta = makeDelta(claims);
+        const set = DeltaSet.from([delta]);
+        idOut.textContent = `one delta \xB7 id ${delta.id.slice(0, 24)}\u2026`;
+        leftTitle.textContent = `the view at ${leftId.value}`;
+        rightTitle.textContent = `the view at ${rightId.value}`;
+        leftPane.textContent = paneFor(set, leftId.value);
+        rightPane.textContent = paneFor(set, rightId.value);
+        err.textContent = "";
+      } catch (e) {
+        leftPane.textContent = "\u2014";
+        rightPane.textContent = "\u2014";
+        err.textContent = `the format refuses this delta: ${e.message}`;
+      }
+    };
+    host.append(
+      el(
+        "div",
+        { class: "controls" },
+        labeled("entity A (role: movie)", leftId),
+        labeled("context at A", leftCtx),
+        labeled("entity B (role: director)", rightId),
+        labeled("context at B", rightCtx)
+      ),
+      el("div", { class: "panel-title" }, "the delta (JSON debug profile)"),
+      deltaOut,
+      idOut,
+      el(
+        "div",
+        { class: "persp-grid" },
+        el("div", { class: "persp-cell" }, leftTitle, leftPane),
+        el("div", { class: "persp-cell" }, rightTitle, rightPane)
+      ),
+      err
+    );
+    for (const i of [leftId, leftCtx, rightId, rightCtx]) i.addEventListener("input", render);
     render();
   }
   var ROOT = "movie:blade_runner";
@@ -7169,8 +7252,8 @@
     const claim = (context, value) => ({
       timestamp: tick(),
       pointers: [
-        { role: "subject", target: { kind: "entity", entity: { id: ROOT, context } } },
-        { role: "value", target: { kind: "primitive", value: parseValue(String(value)) } }
+        { role: "movie", target: { kind: "entity", entity: { id: ROOT, context } } },
+        { role: context, target: { kind: "primitive", value: parseValue(String(value)) } }
       ]
     });
     alice.authorClaims(claim("title", "Blade Runner"));
@@ -7251,10 +7334,10 @@
         timestamp: A.tick(),
         pointers: [
           {
-            role: "subject",
+            role: "movie",
             target: { kind: "entity", entity: { id: ROOT, context: "director" } }
           },
-          { role: "value", target: { kind: "primitive", value: parseValue(val.value) } }
+          { role: "director", target: { kind: "primitive", value: parseValue(val.value) } }
         ]
       });
       syncBoth(A.alice, A.bob);
@@ -7410,8 +7493,8 @@
       peer.authorClaims({
         timestamp: tick(),
         pointers: [
-          { role: "subject", target: { kind: "entity", entity: { id: entity, context } } },
-          { role: "value", target: { kind: "primitive", value } }
+          { role: "rover", target: { kind: "entity", entity: { id: entity, context } } },
+          { role: context, target: { kind: "primitive", value } }
         ]
       });
     };
@@ -7463,10 +7546,10 @@
           timestamp: B.tick(),
           pointers: [
             {
-              role: "subject",
+              role: "rover",
               target: { kind: "entity", entity: { id: "rover:spirit", context: prop.value } }
             },
-            { role: "value", target: { kind: "primitive", value: parseValue(val.value) } }
+            { role: prop.value, target: { kind: "primitive", value: parseValue(val.value) } }
           ]
         });
         prop.value = "";
@@ -7774,6 +7857,7 @@ replayed digest  ${replayed.slice(4, 36)}\u2026
     $("live-stats").textContent = `${n} signed deltas currently live in this tab \u2014 authored, hashed, and verified by the real implementation.`;
   }
   widgetAtom();
+  widgetPerspectives();
   widgetSuperposition();
   widgetHistory();
   widgetFederation();

@@ -57,12 +57,13 @@ function flash(node: HTMLElement): void {
 function valueOf(claims: {
   pointers: ReadonlyArray<{ role: string; target: { kind: string } }>;
 }): string {
-  const p = claims.pointers.find((x) => x.role === "value");
-  if (p !== undefined && p.target.kind === "primitive") {
+  const neg = claims.pointers.find((x) => x.role === "negates");
+  if (neg !== undefined) return "(retraction)";
+  const p = claims.pointers.find((x) => x.target.kind === "primitive");
+  if (p !== undefined) {
     return JSON.stringify((p.target as unknown as { value: unknown }).value);
   }
-  const neg = claims.pointers.find((x) => x.role === "negates");
-  return neg !== undefined ? "(retraction)" : "(edge)";
+  return "(edge)";
 }
 
 function parseValue(raw: string): string | number {
@@ -77,6 +78,7 @@ function widgetAtom(): void {
   const author = el("input", { value: "alice" });
   const ts = el("input", { value: "1", type: "number" });
   const entity = el("input", { value: "movie:blade_runner" });
+  const role = el("input", { value: "movie" });
   const prop = el("input", { value: "director" });
   const val = el("input", { value: "Ridley Scott" });
 
@@ -88,18 +90,21 @@ function widgetAtom(): void {
   const err = el("div", { class: "error" });
 
   const render = (): void => {
+    // The native idiom: the entity pointer's role names what the target IS; its context names
+    // the property this delta files under AT that target (SPEC-1 §2.3); the primitive pointer's
+    // role names what the value IS. No subject anywhere.
     const claims: Claims = {
       author: author.value,
       timestamp: Number(ts.value),
       pointers: [
         {
-          role: "subject",
+          role: role.value,
           target: { kind: "entity", entity: { id: entity.value, context: prop.value } },
         },
-        { role: "value", target: { kind: "primitive", value: parseValue(val.value) } },
+        { role: prop.value, target: { kind: "primitive", value: parseValue(val.value) } },
       ],
     };
-    claimsOut.textContent = JSON.stringify(claims, null, 2);
+    claimsOut.textContent = JSON.stringify(claimsToJson(claims), null, 2);
     try {
       const hex = canonicalHex(claims);
       bytesOut.textContent = hex.replace(/(..)/g, "$1 ").trimEnd();
@@ -136,10 +141,11 @@ function widgetAtom(): void {
       labeled("author", author),
       labeled("timestamp", ts),
       labeled("entity", entity),
-      labeled("property", prop),
+      labeled("its role", role),
+      labeled("property (context)", prop),
       labeled("value", val),
     ),
-    el("div", { class: "panel-title" }, "the claims, as data"),
+    el("div", { class: "panel-title" }, "the claims, as data (JSON debug profile)"),
     claimsOut,
     el("div", { class: "panel-title" }, "canonical bytes"),
     bytesOut,
@@ -149,8 +155,98 @@ function widgetAtom(): void {
     rustLine,
     err,
   );
-  for (const i of [author, ts, entity, prop, val]) i.addEventListener("input", render);
+  for (const i of [author, ts, entity, role, prop, val]) i.addEventListener("input", render);
   rustReady.push(render);
+  render();
+}
+
+// --- §2 every pointer is a perspective -------------------------------------------------------------
+
+function widgetPerspectives(): void {
+  const host = $("w-perspectives");
+  const leftId = el("input", { value: "movie:blade_runner" });
+  const leftCtx = el("input", { value: "director" });
+  const rightId = el("input", { value: "person:ridley_scott" });
+  const rightCtx = el("input", { value: "movies" });
+
+  const deltaOut = el("pre", { class: "code" });
+  const idOut = el("div", { class: "meta mono" });
+  const leftPane = el("pre", { class: "code" });
+  const rightPane = el("pre", { class: "code" });
+  const leftTitle = el("div", { class: "panel-title" });
+  const rightTitle = el("div", { class: "panel-title" });
+  const err = el("div", { class: "error" });
+
+  const VIEW_TERM = parseTerm({
+    op: "group",
+    key: "byTargetContext",
+    in: { op: "mask", policy: "drop", in: "input" },
+  });
+  const LATEST = parsePolicy({ default: { pick: { order: { byTimestamp: "desc" } } } });
+
+  const paneFor = (set: DeltaSet, root: string): string => {
+    const result = evalTerm(VIEW_TERM, set, root);
+    if (result.sort !== "hview") return "(not an hview)";
+    const view = resolveView(LATEST, result.hview);
+    return Object.keys(view).length === 0
+      ? "{}  ← no backpointer. The reference exists;\n    the property was never granted."
+      : JSON.stringify(view, null, 2);
+  };
+
+  const render = (): void => {
+    const entityRef = (id: string, ctx: string) => (ctx === "" ? { id } : { id, context: ctx });
+    const claims: Claims = {
+      author: "alice",
+      timestamp: 1,
+      pointers: [
+        {
+          role: "movie",
+          target: { kind: "entity", entity: entityRef(leftId.value, leftCtx.value) },
+        },
+        {
+          role: "director",
+          target: { kind: "entity", entity: entityRef(rightId.value, rightCtx.value) },
+        },
+      ],
+    };
+    deltaOut.textContent = JSON.stringify(claimsToJson(claims), null, 2);
+    try {
+      const delta = makeDelta(claims);
+      const set = DeltaSet.from([delta]);
+      idOut.textContent = `one delta · id ${delta.id.slice(0, 24)}…`;
+      leftTitle.textContent = `the view at ${leftId.value}`;
+      rightTitle.textContent = `the view at ${rightId.value}`;
+      leftPane.textContent = paneFor(set, leftId.value);
+      rightPane.textContent = paneFor(set, rightId.value);
+      err.textContent = "";
+    } catch (e) {
+      leftPane.textContent = "—";
+      rightPane.textContent = "—";
+      err.textContent = `the format refuses this delta: ${(e as Error).message}`;
+    }
+  };
+
+  host.append(
+    el(
+      "div",
+      { class: "controls" },
+      labeled("entity A (role: movie)", leftId),
+      labeled("context at A", leftCtx),
+      labeled("entity B (role: director)", rightId),
+      labeled("context at B", rightCtx),
+    ),
+    el("div", { class: "panel-title" }, "the delta (JSON debug profile)"),
+    deltaOut,
+    idOut,
+    el(
+      "div",
+      { class: "persp-grid" },
+      el("div", { class: "persp-cell" }, leftTitle, leftPane),
+      el("div", { class: "persp-cell" }, rightTitle, rightPane),
+    ),
+    err,
+  );
+  for (const i of [leftId, leftCtx, rightId, rightCtx]) i.addEventListener("input", render);
   render();
 }
 
@@ -171,11 +267,13 @@ function makeWorldA(): World {
   const bob = new Peer("b2".repeat(32));
   let clock = 0;
   const tick = (): number => ++clock;
+  // Native idiom (SPEC-1 §2.3): the entity pointer's context names the property at the target;
+  // the primitive pointer's role names what the value is.
   const claim = (context: string, value: string | number): Omit<Claims, "author"> => ({
     timestamp: tick(),
     pointers: [
-      { role: "subject", target: { kind: "entity", entity: { id: ROOT, context } } },
-      { role: "value", target: { kind: "primitive", value: parseValue(String(value)) } },
+      { role: "movie", target: { kind: "entity", entity: { id: ROOT, context } } },
+      { role: context, target: { kind: "primitive", value: parseValue(String(value)) } },
     ],
   });
   alice.authorClaims(claim("title", "Blade Runner"));
@@ -268,10 +366,10 @@ function widgetSuperposition(): void {
       timestamp: A.tick(),
       pointers: [
         {
-          role: "subject",
+          role: "movie",
           target: { kind: "entity", entity: { id: ROOT, context: "director" } },
         },
-        { role: "value", target: { kind: "primitive", value: parseValue(val.value) } },
+        { role: "director", target: { kind: "primitive", value: parseValue(val.value) } },
       ],
     });
     syncBoth(A.alice, A.bob);
@@ -449,8 +547,8 @@ function makeWorldB(): FedWorld {
     peer.authorClaims({
       timestamp: tick(),
       pointers: [
-        { role: "subject", target: { kind: "entity", entity: { id: entity, context } } },
-        { role: "value", target: { kind: "primitive", value } },
+        { role: "rover", target: { kind: "entity", entity: { id: entity, context } } },
+        { role: context, target: { kind: "primitive", value } },
       ],
     });
   };
@@ -504,10 +602,10 @@ function renderFederation(): void {
         timestamp: B.tick(),
         pointers: [
           {
-            role: "subject",
+            role: "rover",
             target: { kind: "entity", entity: { id: "rover:spirit", context: prop.value } },
           },
-          { role: "value", target: { kind: "primitive", value: parseValue(val.value) } },
+          { role: prop.value, target: { kind: "primitive", value: parseValue(val.value) } },
         ],
       });
       prop.value = "";
@@ -918,6 +1016,7 @@ function renderStats(): void {
 // --- boot -----------------------------------------------------------------------------------------
 
 widgetAtom();
+widgetPerspectives();
 widgetSuperposition();
 widgetHistory();
 widgetFederation();

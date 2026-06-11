@@ -284,6 +284,21 @@ plus polish (README status update, top-level parity runner, CI).
   Rust 19 suites); wasm + bundles rebuilt; tour verified live (rhizomatic.derived.* receipts,
   130/130). Next: execute the 38 approved FOLDs, one spec doc per slice.
 
+- **THE FOLDS — EXECUTED (45 entries, 8 spec docs, 6 commits)** ✅ — every approved errata
+  pin now lives in its spec doc: SPEC-1 §4.1 is the full normative serialization profile
+  (D1-D9, D11, JSON profile → §4.2); SPEC-2 gained the total order (§3), mask semantics incl.
+  the E14 channel rule (§4.3), group filing (§4.4), expand replacement form (§4.5), registry +
+  root variable + bindings (§4.8), canonical result encodings (§5), the term-hash recipe (§7),
+  and a full term-JSON-profile appendix (§9, absorbing E1 + R7 + holes); SPEC-3 carries the
+  blob vocabulary + bootstrap (§5), the amended mask-first idiom with its rationale (§2), and
+  pinned refs (§6); SPEC-4 the (role, primitive) value index (§3) + ingest outcomes &
+  tested convergence (§2); SPEC-5 candidate extraction (§2.1), merge domains (§3), View shape
+  (§5), policy profile appendix (§7); SPEC-6 the signature boundary (§3) + lens fidelity (§4);
+  SPEC-7 replay recipe (§4), timestamp-0 + emission policies (§5), the write-back loop (§6);
+  SPEC-8 the pinned pack layout (§3) + operationalized invariants (§2). Every errata entry is
+  now either a one-line pointer (folded), a live KEEP (v0 profile/deferral), or a recorded
+  decision. The errata files stay as the index; git carries the archaeology.
+
 ## Queued next (in value order)
 
 1. **WASM host ABI proposal** — ✅ drafted: spec/07-derivation-abi.PROPOSAL.md (status:

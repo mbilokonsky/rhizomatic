@@ -28,5 +28,4 @@ Folded into SPEC-5 §2.1 (2026-06-11); history in git.
 
 ## R7 — `resolve` in the term JSON profile
 
-`{ "op": "resolve", "policy": Policy, "in": Term }`. Its operand must be HView-sort; its result
-sort View is terminal — no operator consumes a View (SPEC-2 §4.7).
+Folded into SPEC-2 §9 (appendix) (2026-06-11); history in git.

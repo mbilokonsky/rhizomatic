@@ -70,6 +70,7 @@ Normative properties:
 - **Total and terminating:** evaluating any `Pred` against any delta is O(|delta|). No recursion, no fixpoints, no data dereference — a predicate sees one delta at a time, never the rest of the set (this preserves context-freeness at the instruction level). Anything requiring cross-delta logic (e.g., "select only corroborated claims") is not expressible here by design; it belongs at L7 (SPEC-7), where a derived author can compute corroboration and assert it as a delta that *then* becomes selectable.
 - **Value predicates are single-delta:** `targetValue` compares the primitive sitting on a pointer of *this* delta; comparison across primitives of different deltas is cross-delta logic and excluded. Mixed-type comparisons resolve by the canonical type order of SPEC-5 §4.
 - **Value predicates are indexable:** `ValMatch` over `(role, value)` pairs is the contract behind the reactor's value index (SPEC-4 §3), making range queries (`releaseYear between 1990–1999`) sublinear. (Primitive targets carry no context — SPEC-1 §2 — so the pointer's role is what names a primitive payload.)
+- **One total order everywhere:** comparisons (`ValMatch`, `match` ordering, and SPEC-5 §4 mixed-type resolution) use a single canonical order — **type rank first (bool < number < string), then value**. Booleans: false < true. Numbers: IEEE-754 order (finite only, by L1 validation). Strings: **bytewise order of the NFC UTF-8 encoding** — not UTF-16 code-unit order, which diverges for astral-plane characters. This matches CBOR map-key ordering; implementations whose native string comparison is UTF-16 must compare encoded bytes. Cross-type `eq` is always false; cross-type ordering follows type rank.
 - **Decidable subsumption (goal):** for the reactor's dispatch optimization, implementations SHOULD be able to test `Pred₁ ⊑ Pred₂` (every delta matching 1 matches 2). The grammar is kept within a decidable fragment for this reason; extensions MUST preserve it.
 - `timestamp` comparisons enable time-travel as a filter (`match(timestamp, lte, T)`); per SPEC-1 §6 these range over *claimed* time.
 
@@ -108,6 +109,12 @@ MaskPolicy ::= drop            // remove negated deltas
 
 `mask` is the only operator whose evaluation of one delta consults other deltas; it is therefore the unit the reactor tracks most carefully (SPEC-4 §4.3).
 
+Pinned semantics:
+
+- `mask(trust(p), D)` behaves exactly like `mask(drop, D)` computed over the restricted negation candidate set `{ n ∈ D : p(n) }`: only trusted negations negate, and negation-of-negation chains are walked within the trusted set only.
+- The `negated(d, D)` recursion is well-founded because `DeltaRef`s are content addresses — a cycle would require a hash collision, and sets verify every id on insert. Implementations still guard the recursion (memoized, with an in-progress default of "not negated") so adversarial input degrades safely instead of overflowing a stack.
+- `mask(annotate)`'s tag channel is a property of the **immediate operand only**: it is consumed by the next operator (`group` threads tags into HVEntries) or dropped — it does not survive `select` or `union`. The audit idiom is therefore `group(key, mask(annotate, …))` with no DSet operator between. (Threading the channel through set-preserving operators would be an `alg`-versioned addition.)
+
 ### 4.4 `group : GroupKey → DSet → HView`  *(for a given root entity)*
 
 ```
@@ -123,6 +130,15 @@ GroupKey ::= byTargetContext     // default: the pointer targeting `root`
 
 This is the π-flavored operator: it imposes the property structure of an object onto a flat set of edges. The default `byTargetContext` is exactly the legacy `Reference.context` behavior, now one choice among a closed set rather than a baked-in rule.
 
+Filing rules (normative):
+
+- Only pointers whose target is an `EntityRef` with `id == root` are **filing pointers**.
+- `byTargetContext`: the delta files under each filing pointer's `context`; a filing pointer without a context files nothing (a property needs a name), and a delta with no filing pointer is excluded from the HView entirely.
+- `byRole`: the delta files under each filing pointer's `role` (roles are always present).
+- `const(s)`: **every** delta in the operand files under `s` — no filing pointer required (the "bag it all" projection).
+- A delta may file under several properties (one per distinct filing key); within one property a delta appears once (entries are unique by delta id).
+- The empty result is `HView{id: root, props: {}}` — present id, empty props, never null (SPEC-3 §7).
+
 ### 4.5 `expand : (role: StrMatch, program: SchemaRef) → HView → HView`
 
 For each delta in each property of the hyperview, for each pointer whose role matches: replace the pointer's `EntityRef` target with the HView produced by evaluating `program` rooted at that entity, **against the same DSet the enclosing evaluation received**.
@@ -130,6 +146,8 @@ For each delta in each property of the hyperview, for each pointer whose role ma
 - `SchemaRef` is a *name* (resolved through the schema registry, SPEC-3 §5), not an inline lambda — this is what keeps the term grammar finite and the DAG constraint checkable.
 - Expansion termination is guaranteed by SPEC-3's DAG requirement on schema references, not by anything in L2; L2 merely demands that `SchemaRef` resolution be acyclic at validation time.
 - Joins, in relational terms, are *already materialized* in delta pointers; `expand` is join-navigation, not join-computation.
+
+Replacement form: `expand` replaces a matching pointer's `EntityRef` target with the HView evaluated at that entity, **against the same delta set the enclosing evaluation received**. In the canonical HVEntry encoding the replaced target is the nested HView map `{"id", "props"}` instead of the EntityRef map (the discriminator is the presence of `"props"`). The delta's true id and claims are never re-hashed with replacements — expansion is view structure, not data; provenance stays intact, with the in-memory entry keeping the original delta plus an expansion table keyed by pointer index (authored pointer order is hash-significant and stable, SPEC-1 §4.1). Pointers whose target is a primitive or DeltaRef never expand; a role-matching EntityRef pointer expands; everything else passes through as written (SPEC-3 §7 graceful degradation).
 
 ### 4.6 `prune : (roles: StrMatch | all) → HView → HView`
 
@@ -145,6 +163,12 @@ The boundary instruction — the only way out of the algebra into application sp
 
 The invocation instruction: evaluate the named schema program at the given root over the given set. (Named `fix` for "fix a perspective," not fixpoint — there are no fixpoints in this algebra.) Top-level queries are `fix` applications; `expand` is internal `fix`.
 
+Registry and the root variable:
+
+- A **HyperSchema** is `{name, alg, body}` where `body` is an HView-sort term (SPEC-3 §2). The **registry** is an explicit evaluation input mapping references to schemas; `refs` are derived from the body (every `expand`/`fix` schema reference), not separately declared — equally static and checkable. Registry construction rejects duplicate names, unresolved refs, and reference cycles (SPEC-3 §3); *data* cycles remain legal and terminate because the schema chain terminates.
+- Schema bodies are functions of their root: predicates may use the **root variable** (`targetEntity: {"var": "root"}`), resolved against the ambient root at evaluation time. A root-variable predicate evaluated with no ambient root matches nothing.
+- `fix` sets the ambient root to its entity explicitly (ignoring any enclosing root); `expand` sets it to each expanded target entity. `fix`'s optional `bindings` introduce the ambient hole environment (§6), flowing through `expand` beneath it.
+
 ## 5. Evaluation Semantics
 
 Evaluation is a pure function:
@@ -157,6 +181,20 @@ eval : Term × DSet → (DSet | HView | View)
 - **Order-blind:** no operator may observe delta-set ordering or pointer ordering (SPEC-1 §4.1).
 - **Monotone where claimed:** `select`, `union`, `group`, `expand` are monotone in `D` (more deltas in ⇒ superset of deltas out). `mask` and `resolve` are **not** monotone (a new negation can remove; a new claim can change a resolved value). This split is normative: it tells the reactor exactly which operators need retraction logic (SPEC-4 §4.3).
 - **Complexity envelope:** for a term `t` and set `D`, evaluation MUST be achievable in O(|D| · |t|) without indexes; the entire point of L4 is to do far better incrementally.
+
+Canonical result encodings (what the conformance vectors compare, byte for byte):
+
+- **DSet result:** the canonical CBOR array of member ids as text strings, sorted lexicographically. A top-level `mask(annotate, …)` result is instead the map `{"ids": [...], "negated": [...]}` (both sorted; `negated` ⊆ `ids`).
+- **HView result:**
+
+```
+HView   = CBOR map { "id": tstr(root), "props": map { propertyName: [HVEntry...] } }
+HVEntry = CBOR map { "id": tstr(deltaId), "claims": <canonical claims map, SPEC-1 §4.1>,
+                     "sig"?: tstr, "negated"?: true }
+```
+
+Map keys sort canonically; entries within a property sort by delta id. The `negated` flag appears only when true and only when the grouped operand was a `mask(annotate)` result. Expanded entries replace targets per §4.5.
+- **View result:** SPEC-5 §5.
 
 ## 6. Relational Completeness
 
@@ -177,7 +215,7 @@ The honest open edge is ad-hoc product/join over entities not already linked by 
 
 Terms have a finite grammar and therefore canonical encodings:
 
-1. **As CBOR** — for transport and hashing, same canonicalization rules as SPEC-1 §4.1.
+1. **As CBOR** — for transport and hashing: serialize the term AST to its normalized JSON-profile structure (a deterministic serializer — optional fields omitted, strings NFC, bindings keys sorted), interpret that structure in the generic CBOR data model (object→map, array→array, string→tstr, number→float, bool→bool), and encode under the SPEC-1 §4.1 rules. Parse∘serialize is identity on the AST, so semantically identical terms hash identically regardless of authored JSON spelling.
 2. **As deltas** — the normative at-rest form (SPEC-3 §5): each term node is an entity; each edge (operator → operand) is a delta. Terms are thereby queryable, forkable, negatable, and federated like everything else (P3: the stored-program property).
 
 A term's content address is the hash of its canonical CBOR; `SchemaRef` MAY pin a specific term hash (immutable reference) or name an entity whose current definition is itself resolved through evaluation (evolvable reference). Both modes are normative; SPEC-3 §6 defines their interaction.
@@ -186,7 +224,52 @@ A term's content address is the hash of its canonical CBOR; `SchemaRef` MAY pin 
 
 The algebra version is part of every serialized term (`alg: 1`). Adding an operator is a major version; implementations MUST reject terms whose algebra version they do not implement, and MUST NOT partially evaluate them. (Silent degradation on an instruction set is corruption.)
 
-## 9. Open Questions (L2)
+## 9. Appendix: Term JSON Profile (Normative)
+
+The JSON spelling of terms and predicates — the authoring surface, and the form the conformance
+vectors and the canonical CBOR pipeline (§7) consume:
+
+```
+Term ::= "input"                                          // the delta set under evaluation
+       | { "op": "select",  "pred": Pred, "in": Term }
+       | { "op": "union",   "left": Term, "right": Term }
+       | { "op": "mask",    "policy": MaskPolicy, "in": Term }
+       | { "op": "group",   "key": "byTargetContext" | "byRole" | { "const": string }, "in": Term }
+       | { "op": "prune",   "keep": "all" | StrMatch, "in": Term }
+       | { "op": "expand",  "role": StrMatch, "schema": SchemaRef, "in": Term }
+       | { "op": "fix",     "schema": SchemaRef, "entity": EntityId,
+           "bindings"?: { name: Primitive, ... } }        // the hole environment (§6)
+       | { "op": "resolve", "policy": Policy, "in": Term }   // Policy: SPEC-5 §7
+
+MaskPolicy ::= "drop" | "annotate" | { "trust": Pred }
+SchemaRef  ::= name | { "pinned": "<term hash>" }            // SPEC-3 §6
+
+Pred ::= "true" | "false"
+       | { "match": { "field": "author"|"timestamp"|"id", "cmp": Cmp, "const": Const } }
+       | { "hasPointer": PPred }
+       | { "and": [Pred, Pred] } | { "or": [Pred, Pred] } | { "not": Pred }
+
+PPred ::= { "role"?: StrMatch, "targetEntity"?: string | {"var":"root"} | Hole,
+            "targetDelta"?: string, "context"?: StrMatch,
+            "targetIsPrimitive"?: boolean, "targetValue"?: ValMatch }
+          // at least one field; all given fields must hold on the SAME pointer
+
+StrMatch ::= { "exact": string } | { "prefix": string } | { "inSet": [string...] }
+ValMatch ::= { "vcmp": { "cmp": Cmp, "value": Primitive | Hole } }
+           | { "between": [Primitive, Primitive] }        // inclusive, canonical order (§3)
+           | { "inSet": [Primitive...] }
+Cmp  ::= "eq"|"neq"|"lt"|"lte"|"gt"|"gte"|"prefix"|"inSet"
+Hole ::= { "hole": "<name>" }                             // Const position only; bound at fix (§6)
+Const ::= Primitive | Hole | [Primitive...]               // array form only with cmp inSet
+```
+
+Parse-time validation: `prefix` requires string (or hole) operands; `match` with `cmp: inSet`
+requires an array const; `and`/`or` take exactly two operands; an empty `PPred` is rejected.
+All strings in terms are NFC-normalized at parse time, so term-side comparisons are NFC-vs-NFC
+with NFC-validated data. `resolve`'s operand must be HView-sort; its View result is terminal —
+no operator consumes a View.
+
+## 10. Open Questions (L2)
 
 - **Aggregation:** count/sum/min/max as `resolve` policies (current position) or as algebra-level operators (needed if aggregates must feed back into selection)? Leaning policy-level until a counterexample forces otherwise.
 - **Ad-hoc join:** confirm derivability or admit a ninth operator (§6).

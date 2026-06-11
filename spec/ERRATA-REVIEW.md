@@ -1,8 +1,9 @@
 # ERRATA upstreaming review
 
-A disposition proposal for every errata entry, prepared for human review. Nothing here is
-applied yet — react to dispositions per-file (or per-entry) and the folding happens as its own
-slice afterward.
+A disposition for every errata entry, reviewed with the maintainer 2026-06-11 and **fully
+applied**: every FOLD below now lives in the spec section named (the errata entry is a one-line
+pointer; history is in git), every KEEP retains its content, and the five DECIDEs are resolved
+in the table that follows.
 
 **Dispositions:**
 

@@ -125,6 +125,13 @@ Normative consequences:
 - Implementations MUST record, in any materialized HyperView's metadata, the resolved pin (hash) of every schema actually used — so that any concrete result is reproducible even when produced via evolvable references.
 - Cycle checking (§3) applies to the *resolved* graph; a definition update that introduces a cycle MUST be rejected at resolution time (the previous resolvable definition remains in effect for that evaluator).
 
+The pinned mode is spelled `{"pinned": "<term hash>"}` wherever a SchemaRef appears; registries
+index every schema by name AND by its term hash (SPEC-2 §7), so pinned refs resolve by hash and
+are immutable by construction. Cycle checking runs over the resolved graph. The **evolvable**
+mode (a ref resolved through `rhizomatic.SchemaSchema` under the evaluator's policy) is
+implemented as an explicit eager load today; transparent re-resolution on definition change
+arrives with reactive registries.
+
 ## 7. Graceful Degradation
 
 Schemas MUST be total over arbitrary delta sets:

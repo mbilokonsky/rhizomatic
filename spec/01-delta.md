@@ -110,21 +110,83 @@ id = multihash( canonical_bytes(claims) )
   - Identical claims by the **same author at the same timestamp** are the **same delta**; union deduplicates them. Identical claims by different authors (or times) are distinct deltas — provenance is part of identity.
   - `DeltaRef`s are Merkle links: a negation cryptographically pins exactly what it negates. Tamper-evidence is structural.
 
-### 4.1 Canonical serialization
+### 4.1 Canonical serialization (the normative profile)
 
-Conformance Level 0 requires byte-exact canonicalization:
+Conformance Level 0 requires byte-exact canonicalization. Encoding is deterministic CBOR
+(RFC 8949 §4.2.1) — definite lengths, sorted map keys, shortest-form floats — specialized by the
+following profile. Test vectors pin `(claims JSON, canonical CBOR hex, multihash)` triples for
+all of it.
 
-- Encoding: deterministic CBOR (RFC 8949 §4.2.1) — definite lengths, sorted map keys, shortest-form integers and floats.
-- Strings NFC-normalized before encoding.
-- `pointers` array order is **preserved and significant for hashing** (it is part of what the author signed) but MUST be treated as **semantically unordered** by all higher layers: no operator (SPEC-2) may distinguish deltas by pointer order.
-- A JSON profile (RFC 8785 / JCS) MAY be offered for debugging and MUST round-trip losslessly to the CBOR form; the CBOR bytes are normative for hashing.
+**Numbers are floats only.** Rhizomatic numbers (primitives and `timestamp`) are finite IEEE-754
+doubles; NaN and ±Infinity are rejected at construction (§2.1). They encode in CBOR as floating
+point only (major type 7) — integer major types are never used, because the data model has a
+single numeric type and emitting only floats removes the integral-double-vs-integer ambiguity
+that otherwise fractures cross-implementation interop. `-0.0` normalizes to `+0.0` before
+encoding. The shortest-float rule is full RFC 8949 §4.2.1: encode in the shortest of float16 /
+float32 / float64 that represents the value *exactly*, including f16 subnormals down to 2^-24.
 
-Test vectors: the conformance suite includes `(claims JSON, canonical CBOR hex, multihash)` triples.
+**Strings** (`role`, `context`, `author`, entity ids, hashes, string primitives) encode as
+definite-length CBOR text strings, **NFC-normalized**. Normalization is *validated at the
+boundary, never repaired at encode time*: every string in claims MUST already be NFC, and
+validation rejects non-NFC strings. (If an implementation silently normalized while encoding, a
+non-NFC in-memory string would differ from the bytes its id commits to, and string comparisons
+at L2 would diverge from canonical-byte equality. In-memory equality is thereby byte equality
+everywhere.) **Booleans** encode as the CBOR simple values (`0xf5`/`0xf4`).
+
+**Map keys** sort by the bytewise lexicographic order of their encoded keys. All Rhizomatic map
+keys are text strings; for `claims` the encoded order is therefore `author, pointers, timestamp`.
+
+**Pointer and target layout.** A `Pointer` encodes as the map `{ "role": tstr, "target": <target> }`.
+Targets are discriminated structurally:
+
+| Target kind | CBOR shape | Discriminator |
+|---|---|---|
+| **Primitive** | a CBOR scalar: tstr, float, or bool | major type is not a map |
+| **EntityRef** | map `{ "id": tstr, "context"?: tstr }` | contains key `id` |
+| **DeltaRef**  | map `{ "delta": tstr, "context"?: tstr }` | contains key `delta` |
+
+This satisfies §2.1's "structurally distinct, never inferred from the shape of an id": the
+discriminating key (`id` vs `delta`) is explicit, and primitive-vs-ref is a CBOR-major-type
+distinction. `context` is omitted entirely when absent — there is no null.
+
+**Claims layout.** `claims` encodes as the map
+`{ "author": tstr, "pointers": [Pointer...], "timestamp": float }`. The `pointers` array is
+definite-length; its order is **preserved and significant for hashing** (it is part of what the
+author signed) but MUST be treated as **semantically unordered** by all higher layers: no
+operator (SPEC-2) may distinguish deltas by pointer order.
+
+**Content address.**
+
+```
+digest = BLAKE3-256( canonical_cbor(claims) )            // 32 bytes
+id     = multihash = 0x1e + 0x20 + digest                // blake3 multicodec 0x1e, length 32
+```
+
+At boundaries (vectors, refs, signatures) `id` is lowercase hex: `"1e20" + hex(digest)`. The
+`id` and `sig` fields are excluded from the hashed bytes (§4).
+
+### 4.2 JSON debug profile
+
+A JSON profile is offered for authoring and inspection (the conformance vectors use it); the
+CBOR bytes remain normative for hashing. The profile is **isomorphic to the canonical
+encoding**: a pointer target is the bare primitive, an entity ref object, or a delta ref
+object — discriminated structurally, exactly as in CBOR:
+
+```json
+{ "role": "title", "target": "The Matrix" }
+{ "role": "cast",  "target": { "id": "keanu", "context": "actor" } }
+{ "role": "negates", "target": { "delta": "1e20…", "context": "audit" } }
+```
+
+What the profile shows IS the wire shape, key for key. **JSON number parsing MUST be correctly
+rounded** (nearest f64, ties-to-even). This is not academic: a fast float path that is 1 ULP off
+fractures canonical-bytes parity — caught in practice by the `float-f16-min-subnormal` vector.
+Any consuming language needs a correctly-rounded parser guarantee.
 
 ## 5. Authorship and Signatures
 
-- `author` is a public key (default Ed25519) or its multihash fingerprint.
-- `sig`, when present, is a detached signature over `id`. Because `id` commits to the full claims, signing the hash signs the delta.
+- For a delta that carries (or will carry) a `sig`, `author` MUST be the string `"ed25519:" + lowercase hex of the 32-byte Ed25519 public key` of the signing key; signing APIs MUST refuse to sign claims whose `author` does not match the signing key (a signature that contradicts its own author field is born broken). Unsigned deltas keep their freedom: any non-empty string is a legal (unverified) author claim.
+- `sig`, when present, is the lowercase hex of the 64-byte Ed25519 (RFC 8032) detached signature over the **raw multihash bytes** of the delta's `id` (the 34 bytes whose hex spelling is the id — not the hex string, not the claims bytes). Because `id` commits to the full claims, signing the hash signs the delta. Ed25519 is deterministic, so signature bytes are reproducible and pinned in vectors. Verification checks, in order: the id recomputes from the claims, then the signature verifies over the id bytes against the key named in `author`.
 - Signatures are OPTIONAL at L1 (local/trusted contexts may omit them). For any delta crossing a federation boundary, signature coverage is REQUIRED in one of two forms: the delta carries its own `sig`, **or** it is accompanied by a signed transaction manifest (§9) whose `DeltaRef` pointers cover it — Merkle coverage, exactly as a git commit authenticates its blobs. An extracted delta travels with its proof.
 - An unsigned delta's `author` field is an unverified claim. Resolution policies (SPEC-5) MAY weight signed and unsigned claims differently. The legacy "spoofable author" problem is thereby reframed: spoofing is detectable wherever signatures are demanded, and policy decides what unsigned claims are worth.
 

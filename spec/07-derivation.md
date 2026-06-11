@@ -46,7 +46,7 @@ Bindings are themselves expressed as deltas (`rhizomatic.derived.*` vocabulary, 
 
 Declared at registration; normative consequences differ:
 
-- **`pure`:** output is a function of `(fnHash, input HyperView content hash)` only. Pure derived authors are **replayable**: any party holding the function and the input hash can recompute and verify the claims. Conformance Level 4 vectors test exactly this. Pure derivations are the system's safe extension mechanism — deterministic computation that simply wasn't worth an algebra operator (aggregates, format converters, derived metrics).
+- **`pure`:** output is a function of `(fnHash, input HyperView content hash)` only. Pure derived authors are **replayable**: any party holding the function and the input hash can recompute and verify the claims. The verification recipe is normative: check the emission's `rhizomatic.derived.from` equals the input view's canonical hex, re-run the function, rebuild the full claims through the same provenance recipe (§5), recompute the content address — it MUST equal the emitted delta's id, and the signature MUST verify. Conformance Level 4 tests exactly this. Pure derivations are the system's safe extension mechanism — deterministic computation that simply wasn't worth an algebra operator (aggregates, format converters, derived metrics).
 - **`effectful`:** consults the world — clocks, randomness, models, networks, humans. Its claims are *testimony*, not *computation*: unverifiable by replay, weighable only by trust (`byAuthorRank`, track record). LLM adjudicators and human review queues are effectful by definition. The spec makes no attempt to launder testimony into proof; it only guarantees the testimony is signed, timestamped, input-pinned, and negatable.
 
 ## 5. Emission & Provenance
@@ -59,13 +59,13 @@ Every delta emitted by a derived author MUST carry derivation provenance pointer
 { role: "rhizomatic.derived.under", target: EntityRef(bindingEntity) }
 ```
 
-plus the substantive claim pointers. `explain` (SPEC-4 §7) therefore traces any derived value to: function → exact input snapshot → the underlying deltas in that snapshot → *their* authors. Judgment all the way down, with receipts.
+plus the substantive claim pointers, signed by the derived author's key. **All derived emissions — including supersede negations — use timestamp 0:** a pure function's output must be a function of (fn, input hash) only (§4), and a wall-clock timestamp would break replayability. The claimed-time ordering of derived claims is therefore meaningless by design; policies rank them by author (`byAuthorRank`) or input freshness, exactly as SPEC-5 §3 prescribes. `explain` (SPEC-4 §7) traces any derived value to: function → exact input snapshot → the underlying deltas in that snapshot → *their* authors. Judgment all the way down, with receipts.
 
 **EmissionPolicy** — what happens when inputs change and the author recomputes:
 
 - `append` — accumulate claims (a running log of judgments; readers resolve by recency or rank).
-- `supersede` — emit negations of the binding's prior claims alongside new ones (the materialized-resolution pattern: at most one live verdict per subject).
-- `keyed(contextSet)` — supersede per-subject rather than wholesale (the common case for per-entity adjudications).
+- `supersede` — before emitting anew, negate the binding's prior live emissions (negations authored and signed by the derived author, timestamp 0; re-negating an already-negated prior dedupes to the same delta id, harmlessly). The materialized-resolution pattern: at most one live verdict per binding.
+- `keyed(contextSet)` — supersede per-subject (the common case for per-entity adjudications). The **key** of an emission is the sorted set of `(entity id, context)` pairs from its substantive entity pointers whose context is in `contextSet`; each new claim negates only the binding's prior live emissions carrying the same key, leaving claims about other subjects live. An emission whose key is empty appends, with no supersession — the binding declared what "the same subject" means, and that claim has none. The key is host-internal state, never serialized; cross-implementation parity is behavioral (which priors get negated).
 
 **Retraction cascade:** if a delta in a derived claim's input snapshot is later negated, the claim is *not* auto-invalidated (its provenance honestly records what was seen when). A `supersede`/`keyed` binding repairs it on next trigger; consumers needing strictness can resolve with `byPred` over input-hash freshness. *(Open: a standard staleness predicate — §10.)*
 
@@ -76,6 +76,7 @@ Derived authors write into the same memory they read — cycles are possible (A'
 - A binding's input term MUST NOT match the binding's own emissions unless explicitly flagged `reentrant`; the host enforces this by predicate analysis (`not(match(author, eq, self))` is injected by default — decidable, per SPEC-2 §3).
 - Reentrant and mutually-recursive bindings run under **budget** (§3): per-trigger and per-window output quotas. Exhausting a budget suspends the binding and emits an `rhizomatic.derived.suspended` annotation — divergence becomes an observable event, not a melted reactor.
 - The host SHOULD maintain the binding dependency graph (input terms vs. emission footprints, both inspectable) and surface cycles at registration time.
+- **The write-back loop:** host ingest runs the reactor ingest, then drains a trigger queue — each change event on a bound materialization triggers its binding, and emissions re-enter through the ordinary ingest path, their change events joining the queue. The drain terminates because (a) a trigger whose responsible deltas are all the binding's own emissions is skipped (the non-reentrancy guard above), and (b) the budget caps lifetime emissions, suspending observably on exhaustion.
 
 There is no global termination guarantee in userland, and the spec does not pretend to one. Kernel determinism (P5) is unaffected: whatever deltas the loop has produced *so far* evaluate deterministically.
 

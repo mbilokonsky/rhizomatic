@@ -26,7 +26,7 @@ What remains — and what this document specifies — is **selection and trust**
 ## 3. Federation Identity & Trust
 
 - A peer is identified by a keypair; `PeerId` = public key. Instances sign their protocol messages.
-- **Crossing a boundary requires signatures:** a delta offered to a peer MUST carry a valid author `sig` (SPEC-1 §5). Unsigned local deltas stay local or are re-issued signed.
+- **Crossing a boundary requires signatures:** an offered delta crosses only if it carries a verifying author `sig`, **or** it is covered by a signed manifest in the same BUNDLE (SPEC-1 §5, §9). The sender partitions its offer accordingly: signed manifests with present members travel as bundles (members may be sig-less — Merkle coverage); remaining signed deltas travel loose; **unsigned uncovered deltas are withheld** — they stay local or are re-issued signed. The receiver verifies bundle manifests before atomic ingestion and loose deltas individually, then applies admission (§5).
 - Trust is two separate, independently-configured judgments:
   1. **Transport trust** — "I accept *delta traffic* from this peer" (admission, §5).
   2. **Claim trust** — "I weight *assertions by this author*" (resolution policy, SPEC-5 §3, `byAuthorRank`).
@@ -47,7 +47,7 @@ BUNDLE    { manifest: Delta, members: Delta[],   // a transaction in transit (SP
 ANNOUNCE  { lens, deltaIds: Hash[] }             // live notification (subscription mode)
 ```
 
-- **Lenses** are L2 terms (by hash) defining what subset a peer offers or wants: `select(hasPointer(targetEntity ∈ S))`, `select(match(author, inSet, A))`, time-bounded slices, schema-relevance closures (SPEC-3 §2.1 — "everything needed to evaluate `MovieSchema`"). Sharing granularity is exactly term granularity; selective sharing is just `fork` (SPEC-1 §8) over the wire.
+- **Lenses** are DSet-sort L2 terms (by hash) defining what subset a peer offers or wants: `select(hasPointer(targetEntity ∈ S))`, `select(match(author, inSet, A))`, time-bounded slices, schema-relevance closures (SPEC-3 §2.1 — "everything needed to evaluate `MovieSchema`"). Sharing granularity is exactly term granularity; selective sharing is just `fork` (SPEC-1 §8) over the wire. **Lens fidelity is a tested invariant:** what a peer offers MUST equal `eval(lens, log)` — no more, no less. (Automatic schema-dependency closure is deferred until evolvable refs exist; relevance lenses are expressible today as entity-targeting selects.)
 - **Reconciliation:** because the unit is a grow-only set, anti-entropy reduces to set reconciliation over content ids (Merkle-tree diff or rateless set reconciliation; implementations choose, vectors define the digest). Order never matters; partial transfer is always safe; resumption is free. Partitions are non-events: a partition is just a long gap between unions, and convergence on heal is the CRDT guarantee (SPEC-4 §2).
 - **Catch-up vs. live:** WANT/OFFER handles history; ANNOUNCE streams new ids for subscribed lenses, with fetch-by-id fallback. A reactor's raw-stream subscription (SPEC-4 §5) is the natural ANNOUNCE source.
 

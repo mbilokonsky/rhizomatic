@@ -158,6 +158,7 @@
   <a href="#lenses">Lenses</a>
   <a href="#history">History</a>
   <a href="#federation">Federation</a>
+  <a href="#computation">Computation</a>
   <a href="#proof">The proof</a>
   <a href="https://github.com/mbilokonsky/rhizomatic">GitHub</a>
 </nav>
@@ -300,8 +301,31 @@
   central sequencer. Signed claims, sovereign peers, set union.</p>
 </section>
 
+<section id="computation">
+  <h2><span class="no">§7</span>Computation is an author</h2>
+  <p>The operator algebra is deliberately closed — eight operators, decidable predicates, no
+  Turing-complete escape hatch. So where does real computation live? It isn't banished;
+  it's <strong>given an identity</strong>. A <em>derived author</em> is a function installed by
+  explicit consent, holding its own keypair, watching a materialization. When the data changes,
+  it computes — and writes the result back as an <strong>ordinary signed claim</strong>, no
+  different from anything a human asserts.</p>
+  <p>Except for one thing: it carries a receipt. Every derived claim pins <em>which function</em>
+  produced it, <em>under which binding</em>, and — in canonical bytes — <em>the exact input
+  view</em> it was computed from. Rate the movie below; the bot recomputes the average, signs
+  it, and supersedes its previous claim. Then audit it: replay the function on the pinned
+  input and check that the recomputed content address matches the claim's id.</p>
+
+  <div class="widget" id="w-derivation"></div>
+
+  <p class="aside">"Trust me" becomes "check me" — for a reducer today; for an ML model or an
+  LLM adjudicator tomorrow, since anything that computes joins the same way. And because
+  outputs re-enter through the ordinary ingest path, runaway loops are handled structurally:
+  every binding carries a budget, and exhausting it produces a signed suspension claim —
+  divergence becomes an observable event, not a melted reactor.</p>
+</section>
+
 <section id="proof">
-  <h2><span class="no">§7</span>Two languages, one digest</h2>
+  <h2><span class="no">§8</span>Two languages, one digest</h2>
   <p>Rhizomatic is a <strong>format with a conformance suite</strong>, not a reference
   implementation. The repo contains the specification, a language-agnostic vector suite, and
   <em>two</em> implementations — TypeScript and Rust — grown in lockstep as independent
@@ -344,11 +368,9 @@
     <tr><th>Rhizomatic</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
   </table>
 
-  <p>Every design decision in the spec exists to keep all five columns true at once. Computation
-  joins the same way everything else does: arbitrary functions (reducers, ML models, LLM
-  adjudicators) are installed by consent as <strong>derived authors</strong> whose outputs
-  re-enter the system as ordinary signed claims — content-addressed, replay-verifiable,
-  budget-bounded. Everything that computes is an author. One rule, all the way up.</p>
+  <p>Every design decision in the spec exists to keep all five columns true at once — and §7
+  showed the rule that keeps the table from needing a sixth: everything that computes is an
+  author. One rule, all the way up.</p>
 </section>
 
 <footer>

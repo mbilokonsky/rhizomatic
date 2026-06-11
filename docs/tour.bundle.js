@@ -1459,84 +1459,6 @@
     );
   }
 
-  // src/json-profile.ts
-  function asObject(x, what) {
-    if (typeof x !== "object" || x === null || Array.isArray(x)) {
-      throw new Error(`expected object for ${what}`);
-    }
-    return x;
-  }
-  function parsePrimitive(v) {
-    if (typeof v === "string" || typeof v === "boolean") return v;
-    if (typeof v === "number") {
-      if (!Number.isFinite(v)) throw new Error("numeric primitive must be finite");
-      return v;
-    }
-    throw new Error("primitive must be string | number | boolean");
-  }
-  function parseTarget(raw) {
-    if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
-      return { kind: "primitive", value: parsePrimitive(raw) };
-    }
-    const o = asObject(raw, "target");
-    if ("id" in o) {
-      const id = o["id"];
-      if (typeof id !== "string") throw new Error("entity ref id must be a string");
-      const context = o["context"];
-      return context === void 0 ? { kind: "entity", entity: { id } } : { kind: "entity", entity: { id, context: String(context) } };
-    }
-    if ("delta" in o) {
-      const delta = o["delta"];
-      if (typeof delta !== "string") throw new Error("delta ref delta must be a string");
-      const context = o["context"];
-      return context === void 0 ? { kind: "delta", deltaRef: { delta } } : { kind: "delta", deltaRef: { delta, context: String(context) } };
-    }
-    throw new Error("target must be a primitive, {id, context?}, or {delta, context?}");
-  }
-  function parsePointer(raw) {
-    const o = asObject(raw, "pointer");
-    if (typeof o["role"] !== "string") throw new Error("pointer.role must be a string");
-    return { role: o["role"], target: parseTarget(o["target"]) };
-  }
-  function claimsToJson(claims) {
-    return {
-      timestamp: claims.timestamp,
-      author: claims.author,
-      pointers: claims.pointers.map((p) => {
-        let target;
-        switch (p.target.kind) {
-          case "primitive":
-            target = p.target.value;
-            break;
-          case "entity":
-            target = {
-              id: p.target.entity.id,
-              ...p.target.entity.context === void 0 ? {} : { context: p.target.entity.context }
-            };
-            break;
-          case "delta":
-            target = {
-              delta: p.target.deltaRef.delta,
-              ...p.target.deltaRef.context === void 0 ? {} : { context: p.target.deltaRef.context }
-            };
-            break;
-        }
-        return { role: p.role, target };
-      })
-    };
-  }
-  function parseClaims(raw) {
-    const o = asObject(raw, "claims");
-    if (typeof o["timestamp"] !== "number") throw new Error("claims.timestamp must be a number");
-    if (typeof o["author"] !== "string") throw new Error("claims.author must be a string");
-    if (!Array.isArray(o["pointers"])) throw new Error("claims.pointers must be an array");
-    return {
-      timestamp: o["timestamp"],
-      author: o["author"],
-      pointers: o["pointers"].map(parsePointer)
-    };
-  }
-
   // src/term-io.ts
   function strMatchToJson(m) {
     switch (m.kind) {
@@ -1685,113 +1607,18 @@
     return contentAddress(termCanonicalBytes(term));
   }
 
-  // src/schema.ts
-  function collectRefs(term) {
-    const out = [];
-    const walk = (t) => {
-      switch (t.kind) {
-        case "input":
-          return;
-        case "select":
-        case "mask":
-        case "group":
-        case "prune":
-        case "resolve":
-          walk(t.of);
-          return;
-        case "union":
-          walk(t.left);
-          walk(t.right);
-          return;
-        case "expand":
-          out.push(t.schema);
-          walk(t.of);
-          return;
-        case "fix":
-          out.push(t.schema);
-          return;
-      }
-    };
-    walk(term);
-    return out;
-  }
-  var SchemaRegistry = class _SchemaRegistry {
-    constructor(byName, byHash) {
-      this.byName = byName;
-      this.byHash = byHash;
-    }
-    byName;
-    byHash;
-    // Rejects duplicate names, unresolved refs, and reference cycles (SPEC-3 §3).
-    // Data cycles remain legal — the DAG constraint is on programs, not data.
-    static build(schemas) {
-      const byName = /* @__PURE__ */ new Map();
-      const byHash = /* @__PURE__ */ new Map();
-      const hashOf = /* @__PURE__ */ new Map();
-      for (const s of schemas) {
-        if (byName.has(s.name)) throw new Error(`duplicate schema name: ${s.name}`);
-        byName.set(s.name, s);
-        const h = termHash(s.body);
-        hashOf.set(s.name, h);
-        if (!byHash.has(h)) byHash.set(h, s);
-      }
-      const resolveName = (ref, from) => {
-        if (ref.kind === "name") {
-          const s2 = byName.get(ref.name);
-          if (s2 === void 0)
-            throw new Error(`schema ${from} references unknown schema ${ref.name}`);
-          return s2.name;
-        }
-        const s = byHash.get(ref.hash);
-        if (s === void 0) {
-          throw new Error(`schema ${from} references unknown pinned schema ${ref.hash} (E13)`);
-        }
-        return s.name;
-      };
-      const refs = /* @__PURE__ */ new Map();
-      for (const s of schemas) {
-        refs.set(
-          s.name,
-          collectRefs(s.body).map((r) => resolveName(r, s.name))
-        );
-      }
-      const state = /* @__PURE__ */ new Map();
-      const visit = (name, path) => {
-        const st = state.get(name);
-        if (st === "done") return;
-        if (st === "visiting") {
-          throw new Error(`schema reference cycle: ${[...path, name].join(" -> ")} (SPEC-3 \xA73)`);
-        }
-        state.set(name, "visiting");
-        for (const r of refs.get(name) ?? []) visit(r, [...path, name]);
-        state.set(name, "done");
-      };
-      for (const s of schemas) visit(s.name, []);
-      return new _SchemaRegistry(byName, byHash);
-    }
-    get(name) {
-      return this.byName.get(name);
-    }
-    getByHash(hash) {
-      return this.byHash.get(hash);
-    }
-    resolve(ref) {
-      return ref.kind === "name" ? this.byName.get(ref.name) : this.byHash.get(ref.hash);
-    }
-  };
-
   // src/term-json.ts
   var CMPS = ["eq", "neq", "lt", "lte", "gt", "gte", "prefix", "inSet"];
   function nfc(s) {
     return s.normalize("NFC");
   }
-  function asObject2(x, what) {
+  function asObject(x, what) {
     if (typeof x !== "object" || x === null || Array.isArray(x)) {
       throw new Error(`expected object for ${what}`);
     }
     return x;
   }
-  function parsePrimitive2(v, what) {
+  function parsePrimitive(v, what) {
     if (typeof v === "string") return nfc(v);
     if (typeof v === "boolean") return v;
     if (typeof v === "number") {
@@ -1807,7 +1634,7 @@
     return v;
   }
   function parseStrMatch(raw, what) {
-    const o = asObject2(raw, what);
+    const o = asObject(raw, what);
     if (typeof o["exact"] === "string") return { kind: "exact", value: nfc(o["exact"]) };
     if (typeof o["prefix"] === "string") return { kind: "prefix", value: nfc(o["prefix"]) };
     if (Array.isArray(o["inSet"])) {
@@ -1822,13 +1649,13 @@
     throw new Error(`${what}: StrMatch must be exact | prefix | inSet`);
   }
   function parseValMatch(raw, what) {
-    const o = asObject2(raw, what);
+    const o = asObject(raw, what);
     if (o["vcmp"] !== void 0) {
-      const v = asObject2(o["vcmp"], `${what}.vcmp`);
+      const v = asObject(o["vcmp"], `${what}.vcmp`);
       const cmp = parseCmp(v["cmp"], `${what}.vcmp`);
       if (cmp === "inSet")
         throw new Error(`${what}: vcmp cmp inSet is not allowed; use the inSet arm`);
-      const value = parsePrimitive2(v["value"], `${what}.vcmp`);
+      const value = parsePrimitive(v["value"], `${what}.vcmp`);
       if (cmp === "prefix" && typeof value !== "string") {
         throw new Error(`${what}: prefix requires a string constant`);
       }
@@ -1838,17 +1665,17 @@
       if (o["between"].length !== 2) throw new Error(`${what}: between takes [lo, hi]`);
       return {
         kind: "between",
-        lo: parsePrimitive2(o["between"][0], `${what}.between`),
-        hi: parsePrimitive2(o["between"][1], `${what}.between`)
+        lo: parsePrimitive(o["between"][0], `${what}.between`),
+        hi: parsePrimitive(o["between"][1], `${what}.between`)
       };
     }
     if (Array.isArray(o["inSet"])) {
-      return { kind: "inSet", values: o["inSet"].map((v) => parsePrimitive2(v, `${what}.inSet`)) };
+      return { kind: "inSet", values: o["inSet"].map((v) => parsePrimitive(v, `${what}.inSet`)) };
     }
     throw new Error(`${what}: ValMatch must be vcmp | between | inSet`);
   }
   function parsePPred(raw) {
-    const o = asObject2(raw, "hasPointer");
+    const o = asObject(raw, "hasPointer");
     const out = {};
     if (o["role"] !== void 0) out.role = parseStrMatch(o["role"], "hasPointer.role");
     if (o["targetEntity"] !== void 0) {
@@ -1856,7 +1683,7 @@
       if (typeof te === "string") {
         out.targetEntity = { kind: "const", id: nfc(te) };
       } else {
-        const v = asObject2(te, "targetEntity");
+        const v = asObject(te, "targetEntity");
         if (v["var"] !== "root") throw new Error('targetEntity must be a string or {var: "root"}');
         out.targetEntity = { kind: "root" };
       }
@@ -1881,9 +1708,9 @@
   function parsePred(raw) {
     if (raw === "true") return { kind: "true" };
     if (raw === "false") return { kind: "false" };
-    const o = asObject2(raw, "pred");
+    const o = asObject(raw, "pred");
     if (o["match"] !== void 0) {
-      const m = asObject2(o["match"], "match");
+      const m = asObject(o["match"], "match");
       const field = m["field"];
       if (field !== "author" && field !== "timestamp" && field !== "id") {
         throw new Error(`match: unknown field ${String(field)}`);
@@ -1892,8 +1719,8 @@
       const rawConst = m["const"];
       const constant = cmp === "inSet" ? (() => {
         if (!Array.isArray(rawConst)) throw new Error("match: inSet requires an array const");
-        return rawConst.map((v) => parsePrimitive2(v, "match.const"));
-      })() : parsePrimitive2(rawConst, "match.const");
+        return rawConst.map((v) => parsePrimitive(v, "match.const"));
+      })() : parsePrimitive(rawConst, "match.const");
       if (cmp === "prefix" && typeof constant !== "string") {
         throw new Error("match: prefix requires a string const");
       }
@@ -1916,14 +1743,14 @@
   function parseMaskPolicy(raw) {
     if (raw === "drop") return { kind: "drop" };
     if (raw === "annotate") return { kind: "annotate" };
-    const o = asObject2(raw, "mask.policy");
+    const o = asObject(raw, "mask.policy");
     if (o["trust"] !== void 0) return { kind: "trust", pred: parsePred(o["trust"]) };
     throw new Error("mask policy must be drop | annotate | {trust: Pred}");
   }
   var MERGE_FNS = ["max", "min", "sum", "count", "and", "or", "concatSorted"];
   function parseOrder(raw) {
     if (raw === "lexById") return { kind: "lexById" };
-    const o = asObject2(raw, "order");
+    const o = asObject(raw, "order");
     if (o["byTimestamp"] !== void 0) {
       if (o["byTimestamp"] !== "desc" && o["byTimestamp"] !== "asc") {
         throw new Error("byTimestamp must be desc | asc");
@@ -1940,18 +1767,18 @@
       };
     }
     if (o["byPred"] !== void 0) {
-      const p = asObject2(o["byPred"], "byPred");
+      const p = asObject(o["byPred"], "byPred");
       return { kind: "byPred", pred: parsePred(p["pred"]), then: parseOrder(p["then"]) };
     }
     throw new Error("order must be lexById | byTimestamp | byAuthorRank | byPred");
   }
   function parsePropPolicy(raw) {
-    const o = asObject2(raw, "propPolicy");
+    const o = asObject(raw, "propPolicy");
     if (o["pick"] !== void 0) {
-      return { kind: "pick", order: parseOrder(asObject2(o["pick"], "pick")["order"]) };
+      return { kind: "pick", order: parseOrder(asObject(o["pick"], "pick")["order"]) };
     }
     if (o["all"] !== void 0) {
-      return { kind: "all", order: parseOrder(asObject2(o["all"], "all")["order"]) };
+      return { kind: "all", order: parseOrder(asObject(o["all"], "all")["order"]) };
     }
     if (o["merge"] !== void 0) {
       if (!MERGE_FNS.includes(o["merge"])) {
@@ -1960,23 +1787,23 @@
       return { kind: "merge", fn: o["merge"] };
     }
     if (o["conflicts"] !== void 0) {
-      return { kind: "conflicts", order: parseOrder(asObject2(o["conflicts"], "conflicts")["order"]) };
+      return { kind: "conflicts", order: parseOrder(asObject(o["conflicts"], "conflicts")["order"]) };
     }
     if (o["absentAs"] !== void 0) {
-      const a = asObject2(o["absentAs"], "absentAs");
+      const a = asObject(o["absentAs"], "absentAs");
       return {
         kind: "absentAs",
-        constant: parsePrimitive2(a["const"], "absentAs.const"),
+        constant: parsePrimitive(a["const"], "absentAs.const"),
         then: parsePropPolicy(a["then"])
       };
     }
     throw new Error("propPolicy must be pick | all | merge | conflicts | absentAs");
   }
   function parsePolicy(raw) {
-    const o = asObject2(raw, "policy");
+    const o = asObject(raw, "policy");
     const props = /* @__PURE__ */ new Map();
     if (o["props"] !== void 0) {
-      for (const [k, v] of Object.entries(asObject2(o["props"], "policy.props"))) {
+      for (const [k, v] of Object.entries(asObject(o["props"], "policy.props"))) {
         props.set(nfc(k), parsePropPolicy(v));
       }
     }
@@ -1985,19 +1812,19 @@
   function parseGroupKey(raw) {
     if (raw === "byTargetContext") return { kind: "byTargetContext" };
     if (raw === "byRole") return { kind: "byRole" };
-    const o = asObject2(raw, "group.key");
+    const o = asObject(raw, "group.key");
     if (typeof o["const"] === "string") return { kind: "const", prop: nfc(o["const"]) };
     throw new Error("group key must be byTargetContext | byRole | {const: string}");
   }
   function parseSchemaRef(raw) {
     if (typeof raw === "string") return { kind: "name", name: nfc(raw) };
-    const o = asObject2(raw, "schemaRef");
+    const o = asObject(raw, "schemaRef");
     if (typeof o["pinned"] === "string") return { kind: "pinned", hash: o["pinned"] };
     throw new Error("schema ref must be a name string or {pinned: hash} (E13)");
   }
   function parseTerm(raw) {
     if (raw === "input") return { kind: "input" };
-    const o = asObject2(raw, "term");
+    const o = asObject(raw, "term");
     switch (o["op"]) {
       case "select":
         return { kind: "select", pred: parsePred(o["pred"]), of: parseTerm(o["in"]) };
@@ -3756,6 +3583,322 @@
       return "invalid";
     }
   }
+
+  // src/derivation.ts
+  function provenancePointers(spec, inputHex) {
+    return [
+      {
+        role: `${VOCAB_PREFIX}.derived.by`,
+        target: { kind: "entity", entity: { id: spec.fnId } }
+      },
+      { role: `${VOCAB_PREFIX}.derived.from`, target: { kind: "primitive", value: inputHex } },
+      {
+        role: `${VOCAB_PREFIX}.derived.under`,
+        target: { kind: "entity", entity: { id: spec.name } }
+      }
+    ];
+  }
+  function derivedClaims(spec, author, substantive, inputHex) {
+    return {
+      timestamp: 0,
+      author,
+      pointers: [...substantive, ...provenancePointers(spec, inputHex)]
+    };
+  }
+  var DerivationHost = class {
+    constructor(reactor) {
+      this.reactor = reactor;
+    }
+    reactor;
+    bindings = /* @__PURE__ */ new Map();
+    // Installation is an assertion: a signed rdb.derived.binds delta (SPEC-7 §3).
+    install(spec, fn, seedHex) {
+      if (this.bindings.has(spec.name)) throw new Error(`duplicate binding: ${spec.name}`);
+      const author = authorForSeed(seedHex);
+      const binds = signClaims(
+        {
+          timestamp: 0,
+          author,
+          pointers: [
+            {
+              role: `${VOCAB_PREFIX}.derived.binds`,
+              target: { kind: "entity", entity: { id: spec.fnId, context: "bindings" } }
+            },
+            { role: `${VOCAB_PREFIX}.derived.author`, target: { kind: "primitive", value: author } }
+          ]
+        },
+        seedHex
+      );
+      this.reactor.ingest(binds);
+      this.bindings.set(spec.name, {
+        spec,
+        fn,
+        seedHex,
+        author,
+        liveEmissions: [],
+        triggerCount: 0,
+        suspended: false
+      });
+      return author;
+    }
+    isSuspended(name) {
+      return this.bindings.get(name)?.suspended ?? false;
+    }
+    authorOf(name) {
+      return this.bindings.get(name)?.author;
+    }
+    // The write-back loop (G2): ingest, then drain triggers until quiescent.
+    ingest(delta) {
+      const result = this.reactor.ingest(delta);
+      if (result.status !== "accepted") return result;
+      this.drain([...this.reactor.changesFromLastIngest()]);
+      return result;
+    }
+    drain(pending) {
+      let depth = 0;
+      while (pending.length > 0 && depth < 32) {
+        depth += 1;
+        const next = [];
+        for (const change of pending) {
+          for (const b of this.bindings.values()) {
+            if (b.spec.materialization !== change.materialization) continue;
+            next.push(...this.trigger(b, change));
+          }
+        }
+        pending = next;
+      }
+    }
+    emitSigned(b, claims) {
+      const signed = signClaims(claims, b.seedHex);
+      const result = this.reactor.ingest(signed);
+      if (result.status === "rejected") throw new Error("derived emission rejected");
+      return result.status === "accepted" ? [...this.reactor.changesFromLastIngest()] : [];
+    }
+    trigger(b, change) {
+      if (b.suspended) return [];
+      const own = change.responsibleDeltaIds.every(
+        (id) => this.reactor.get(id)?.claims.author === b.author
+      );
+      if (own) return [];
+      if (b.triggerCount >= b.spec.budget) {
+        b.suspended = true;
+        return this.emitSigned(b, {
+          timestamp: 0,
+          author: b.author,
+          pointers: [
+            {
+              role: `${VOCAB_PREFIX}.derived.suspended`,
+              target: { kind: "entity", entity: { id: b.spec.name, context: "suspensions" } }
+            }
+          ]
+        });
+      }
+      b.triggerCount += 1;
+      const view = this.reactor.materializedView(change.materialization, change.root);
+      if (view === void 0) return [];
+      const out = [];
+      if (b.spec.emit === "supersede") {
+        for (const prior of b.liveEmissions) {
+          out.push(...this.emitSigned(b, makeNegationClaims(b.author, 0, prior)));
+        }
+        b.liveEmissions = [];
+      }
+      for (const substantive of b.fn(view, change.root)) {
+        const claims = derivedClaims(b.spec, b.author, substantive, change.newHex);
+        const signed = signClaims(claims, b.seedHex);
+        const result = this.reactor.ingest(signed);
+        if (result.status === "accepted") {
+          b.liveEmissions.push(signed.id);
+          out.push(...this.reactor.changesFromLastIngest());
+        }
+      }
+      return out;
+    }
+  };
+  function verifyPureDerivation(emitted, spec, fn, view, root, viewHex) {
+    if (verifyDelta(emitted) !== "verified") return false;
+    const fromPtr = emitted.claims.pointers.find(
+      (p) => p.role === `${VOCAB_PREFIX}.derived.from` && p.target.kind === "primitive"
+    );
+    if (fromPtr?.target.kind !== "primitive" || fromPtr.target.value !== viewHex) return false;
+    const ids = fn(view, root).map(
+      (substantive) => computeId(derivedClaims(spec, emitted.claims.author, substantive, viewHex))
+    );
+    return ids.includes(emitted.id);
+  }
+
+  // src/json-profile.ts
+  function asObject2(x, what) {
+    if (typeof x !== "object" || x === null || Array.isArray(x)) {
+      throw new Error(`expected object for ${what}`);
+    }
+    return x;
+  }
+  function parsePrimitive2(v) {
+    if (typeof v === "string" || typeof v === "boolean") return v;
+    if (typeof v === "number") {
+      if (!Number.isFinite(v)) throw new Error("numeric primitive must be finite");
+      return v;
+    }
+    throw new Error("primitive must be string | number | boolean");
+  }
+  function parseTarget(raw) {
+    if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
+      return { kind: "primitive", value: parsePrimitive2(raw) };
+    }
+    const o = asObject2(raw, "target");
+    if ("id" in o) {
+      const id = o["id"];
+      if (typeof id !== "string") throw new Error("entity ref id must be a string");
+      const context = o["context"];
+      return context === void 0 ? { kind: "entity", entity: { id } } : { kind: "entity", entity: { id, context: String(context) } };
+    }
+    if ("delta" in o) {
+      const delta = o["delta"];
+      if (typeof delta !== "string") throw new Error("delta ref delta must be a string");
+      const context = o["context"];
+      return context === void 0 ? { kind: "delta", deltaRef: { delta } } : { kind: "delta", deltaRef: { delta, context: String(context) } };
+    }
+    throw new Error("target must be a primitive, {id, context?}, or {delta, context?}");
+  }
+  function parsePointer(raw) {
+    const o = asObject2(raw, "pointer");
+    if (typeof o["role"] !== "string") throw new Error("pointer.role must be a string");
+    return { role: o["role"], target: parseTarget(o["target"]) };
+  }
+  function claimsToJson(claims) {
+    return {
+      timestamp: claims.timestamp,
+      author: claims.author,
+      pointers: claims.pointers.map((p) => {
+        let target;
+        switch (p.target.kind) {
+          case "primitive":
+            target = p.target.value;
+            break;
+          case "entity":
+            target = {
+              id: p.target.entity.id,
+              ...p.target.entity.context === void 0 ? {} : { context: p.target.entity.context }
+            };
+            break;
+          case "delta":
+            target = {
+              delta: p.target.deltaRef.delta,
+              ...p.target.deltaRef.context === void 0 ? {} : { context: p.target.deltaRef.context }
+            };
+            break;
+        }
+        return { role: p.role, target };
+      })
+    };
+  }
+  function parseClaims(raw) {
+    const o = asObject2(raw, "claims");
+    if (typeof o["timestamp"] !== "number") throw new Error("claims.timestamp must be a number");
+    if (typeof o["author"] !== "string") throw new Error("claims.author must be a string");
+    if (!Array.isArray(o["pointers"])) throw new Error("claims.pointers must be an array");
+    return {
+      timestamp: o["timestamp"],
+      author: o["author"],
+      pointers: o["pointers"].map(parsePointer)
+    };
+  }
+
+  // src/schema.ts
+  function collectRefs(term) {
+    const out = [];
+    const walk = (t) => {
+      switch (t.kind) {
+        case "input":
+          return;
+        case "select":
+        case "mask":
+        case "group":
+        case "prune":
+        case "resolve":
+          walk(t.of);
+          return;
+        case "union":
+          walk(t.left);
+          walk(t.right);
+          return;
+        case "expand":
+          out.push(t.schema);
+          walk(t.of);
+          return;
+        case "fix":
+          out.push(t.schema);
+          return;
+      }
+    };
+    walk(term);
+    return out;
+  }
+  var SchemaRegistry = class _SchemaRegistry {
+    constructor(byName, byHash) {
+      this.byName = byName;
+      this.byHash = byHash;
+    }
+    byName;
+    byHash;
+    // Rejects duplicate names, unresolved refs, and reference cycles (SPEC-3 §3).
+    // Data cycles remain legal — the DAG constraint is on programs, not data.
+    static build(schemas) {
+      const byName = /* @__PURE__ */ new Map();
+      const byHash = /* @__PURE__ */ new Map();
+      const hashOf = /* @__PURE__ */ new Map();
+      for (const s of schemas) {
+        if (byName.has(s.name)) throw new Error(`duplicate schema name: ${s.name}`);
+        byName.set(s.name, s);
+        const h = termHash(s.body);
+        hashOf.set(s.name, h);
+        if (!byHash.has(h)) byHash.set(h, s);
+      }
+      const resolveName = (ref, from) => {
+        if (ref.kind === "name") {
+          const s2 = byName.get(ref.name);
+          if (s2 === void 0)
+            throw new Error(`schema ${from} references unknown schema ${ref.name}`);
+          return s2.name;
+        }
+        const s = byHash.get(ref.hash);
+        if (s === void 0) {
+          throw new Error(`schema ${from} references unknown pinned schema ${ref.hash} (E13)`);
+        }
+        return s.name;
+      };
+      const refs = /* @__PURE__ */ new Map();
+      for (const s of schemas) {
+        refs.set(
+          s.name,
+          collectRefs(s.body).map((r) => resolveName(r, s.name))
+        );
+      }
+      const state = /* @__PURE__ */ new Map();
+      const visit = (name, path) => {
+        const st = state.get(name);
+        if (st === "done") return;
+        if (st === "visiting") {
+          throw new Error(`schema reference cycle: ${[...path, name].join(" -> ")} (SPEC-3 \xA73)`);
+        }
+        state.set(name, "visiting");
+        for (const r of refs.get(name) ?? []) visit(r, [...path, name]);
+        state.set(name, "done");
+      };
+      for (const s of schemas) visit(s.name, []);
+      return new _SchemaRegistry(byName, byHash);
+    }
+    get(name) {
+      return this.byName.get(name);
+    }
+    getByHash(hash) {
+      return this.byHash.get(hash);
+    }
+    resolve(ref) {
+      return ref.kind === "name" ? this.byName.get(ref.name) : this.byHash.get(ref.hash);
+    }
+  };
 
   // src/reactor.ts
   var Reactor = class {
@@ -7680,6 +7823,159 @@ replayed digest  ${replayed.slice(4, 36)}\u2026
     rustReady.push(run);
     run();
   }
+  function widgetDerivation() {
+    const host = $("w-derivation");
+    const root = "movie:blade_runner";
+    const body = parseTerm({
+      op: "group",
+      key: "byTargetContext",
+      in: {
+        op: "select",
+        pred: { hasPointer: { targetEntity: { var: "root" } } },
+        in: { op: "mask", policy: "drop", in: "input" }
+      }
+    });
+    const reactor = new Reactor();
+    reactor.register("movie", body, [root]);
+    const bot = new DerivationHost(reactor);
+    let clock = 1e3;
+    const dataClaim = (context, value, author) => makeDelta({
+      timestamp: ++clock,
+      author,
+      pointers: [
+        { role: "movie", target: { kind: "entity", entity: { id: root, context } } },
+        { role: context, target: { kind: "primitive", value } }
+      ]
+    });
+    const avgFn = (view, r) => {
+      const nums = (view.props.get("rating") ?? []).flatMap((e) => e.delta.claims.pointers).filter((p) => p.target.kind === "primitive").map((p) => p.target.value).filter((v) => typeof v === "number");
+      if (nums.length === 0) return [];
+      const avg = Math.round(nums.reduce((a, b) => a + b, 0) / nums.length * 100) / 100;
+      return [
+        [
+          { role: "movie", target: { kind: "entity", entity: { id: r, context: "avgRating" } } },
+          { role: "avgRating", target: { kind: "primitive", value: avg } }
+        ]
+      ];
+    };
+    const tamperedFn = (v, r) => avgFn(v, r).map(
+      (ptrs) => ptrs.map(
+        (p) => p.target.kind === "primitive" && typeof p.target.value === "number" ? { ...p, target: { kind: "primitive", value: p.target.value + 1 } } : p
+      )
+    );
+    const spec = {
+      name: "binding:avg",
+      fnId: "fn:avgRating",
+      materialization: "movie",
+      pure: true,
+      budget: 100,
+      emit: "supersede"
+    };
+    const botAuthor = bot.install(spec, avgFn, "f6".repeat(32));
+    let lastInputLen = 0;
+    const rate = (n, author) => {
+      const before = reactor.arrivalLog().length;
+      bot.ingest(dataClaim("rating", n, author));
+      lastInputLen = before + 1;
+    };
+    bot.ingest(dataClaim("title", "Blade Runner", "did:key:zAlice"));
+    rate(9, "did:key:zCarol");
+    rate(8, "did:key:zDana");
+    const ratingsOut = el("div", { class: "meta" });
+    const receiptOut = el("pre", { class: "code" });
+    const verifyOut = el("div", {});
+    const latestEmission = () => {
+      const log = reactor.arrivalLog();
+      for (let i = log.length - 1; i >= 0; i--) {
+        const d = log[i];
+        if (d.claims.author !== botAuthor) continue;
+        if (d.claims.pointers.some((p) => p.role === "negates")) continue;
+        return d;
+      }
+      return void 0;
+    };
+    const render = () => {
+      const view = reactor.materializedView("movie", root);
+      const ratings = view ? view.props.get("rating") ?? [] : [];
+      ratingsOut.textContent = `${ratings.length} ratings on record: ${ratings.map((e) => valueOf(e.delta.claims)).join(", ")}`;
+      const emitted = latestEmission();
+      if (emitted === void 0) {
+        receiptOut.textContent = "(no emission yet \u2014 rate the movie)";
+        return;
+      }
+      const prov = (suffix) => {
+        const p = emitted.claims.pointers.find((x) => x.role === `${VOCAB_PREFIX}.derived.${suffix}`);
+        if (p === void 0) return "?";
+        if (p.target.kind === "primitive") return String(p.target.value);
+        if (p.target.kind === "entity") return p.target.entity.id;
+        return p.target.kind;
+      };
+      receiptOut.textContent = [
+        `avgRating = ${valueOf(emitted.claims)}`,
+        ``,
+        `author  ${emitted.claims.author.slice(0, 32)}\u2026  (the bot's own keypair)`,
+        `id      ${emitted.id.slice(0, 32)}\u2026`,
+        `${VOCAB_PREFIX}.derived.by    = ${prov("by")}`,
+        `${VOCAB_PREFIX}.derived.from  = ${prov("from").slice(0, 24)}\u2026  (the exact input view, pinned byte for byte)`,
+        `${VOCAB_PREFIX}.derived.under = ${prov("under")}`
+      ].join("\n");
+      verifyOut.replaceChildren();
+    };
+    const verify = () => {
+      const emitted = latestEmission();
+      if (emitted === void 0) return;
+      const probe = new Reactor();
+      probe.register("movie", body, [root]);
+      for (const d of reactor.arrivalLog().slice(0, lastInputLen)) probe.ingest(d);
+      const viewHex = probe.materializedHex("movie", root);
+      const view = probe.materializedView("movie", root);
+      if (view === void 0 || viewHex === void 0) return;
+      const genuine = verifyPureDerivation(emitted, spec, avgFn, view, root, viewHex);
+      const tampered = verifyPureDerivation(emitted, spec, tamperedFn, view, root, viewHex);
+      verifyOut.replaceChildren(
+        el(
+          "div",
+          { class: genuine ? "ok" : "error" },
+          genuine ? "\u2713 replay verified \u2014 re-ran the function on the pinned input; the recomputed content address matches the claim's id, and the signature checks out" : "\u2717 replay FAILED \u2014 this receipt does not check out"
+        ),
+        el(
+          "div",
+          { class: tampered ? "error" : "ok" },
+          tampered ? "\u2717 the tampered function ALSO verified \u2014 that would be a bug" : "\u2713 and a tampered function (+1 to every average) fails the same replay \u2014 forgery is detectable, not just discouraged"
+        )
+      );
+      flash(verifyOut);
+    };
+    const buttons = el("div", { class: "controls" });
+    for (const n of [6, 7, 8, 9, 10]) {
+      const b = el("button", {}, `rate ${n}`);
+      b.onclick = () => {
+        rate(n, "did:key:zYou");
+        render();
+      };
+      buttons.append(b);
+    }
+    const verifyBtn = el(
+      "button",
+      { class: "big", style: "margin-top:0.8em" },
+      "\u{1F50D} replay-verify the receipt"
+    );
+    verifyBtn.onclick = verify;
+    host.append(
+      el("div", { class: "panel-title" }, "rate the movie (as did:key:zYou)"),
+      buttons,
+      ratingsOut,
+      el(
+        "div",
+        { class: "panel-title" },
+        "the bot's latest claim \u2014 an ordinary signed delta, carrying its receipt"
+      ),
+      receiptOut,
+      verifyBtn,
+      verifyOut
+    );
+    render();
+  }
   function renderStats() {
     const n = A.alice.reactor.size + A.bob.reactor.size + B.pat.reactor.size + B.quinn.reactor.size;
     $("live-stats").textContent = `${n} signed deltas currently live in this tab \u2014 authored, hashed, and verified by the real implementation.`;
@@ -7690,6 +7986,7 @@ replayed digest  ${replayed.slice(4, 36)}\u2026
   widgetHistory();
   widgetFederation();
   widgetReplay();
+  widgetDerivation();
   widgetConformance();
   refreshWorldA();
   void loadRustWitness().then((w) => {

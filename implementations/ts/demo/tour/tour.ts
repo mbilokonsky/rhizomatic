@@ -3,6 +3,12 @@
 // This file is DOM glue only; all semantics come from src/.
 
 import { canonicalHex, computeId } from "../../src/delta.js";
+import {
+  DerivationHost,
+  verifyPureDerivation,
+  type BindingSpec,
+  type DerivedFn,
+} from "../../src/derivation.js";
 import { evalTerm, resultCanonicalHex } from "../../src/eval.js";
 import type { HView } from "../../src/hview.js";
 import { claimsToJson, parseClaims } from "../../src/json-profile.js";
@@ -10,10 +16,11 @@ import { Peer, syncBoth } from "../../src/peer.js";
 import { resolveView, type Policy, type View } from "../../src/policy.js";
 import { Reactor } from "../../src/reactor.js";
 import { SchemaRegistry } from "../../src/schema.js";
+import { VOCAB_PREFIX } from "../../src/schema-deltas.js";
 import { DeltaSet, makeDelta, makeNegationClaims } from "../../src/set.js";
 import { publicKeyFromSeed, signClaims, verifyDelta } from "../../src/sign.js";
 import { parsePolicy, parseTerm } from "../../src/term-json.js";
-import type { Claims, Delta } from "../../src/types.js";
+import type { Claims, Delta, Pointer } from "../../src/types.js";
 
 // The committed conformance vectors, bundled in at build time. CI's docs-freshness gate
 // rebuilds this bundle, so the page can never drift from the vectors the witnesses pass.
@@ -1005,6 +1012,191 @@ function widgetConformance(): void {
   run();
 }
 
+// --- §7 computation is an author -------------------------------------------------------------------
+
+function widgetDerivation(): void {
+  const host = $("w-derivation");
+  const root = "movie:blade_runner";
+  const body = parseTerm({
+    op: "group",
+    key: "byTargetContext",
+    in: {
+      op: "select",
+      pred: { hasPointer: { targetEntity: { var: "root" } } },
+      in: { op: "mask", policy: "drop", in: "input" },
+    },
+  });
+  const reactor = new Reactor();
+  reactor.register("movie", body, [root]);
+  const bot = new DerivationHost(reactor);
+
+  let clock = 1000;
+  const dataClaim = (context: string, value: string | number, author: string): Delta =>
+    makeDelta({
+      timestamp: ++clock,
+      author,
+      pointers: [
+        { role: "movie", target: { kind: "entity", entity: { id: root, context } } },
+        { role: context, target: { kind: "primitive", value } },
+      ],
+    });
+
+  const avgFn: DerivedFn = (view: HView, r: string): Pointer[][] => {
+    const nums = (view.props.get("rating") ?? [])
+      .flatMap((e) => e.delta.claims.pointers)
+      .filter((p) => p.target.kind === "primitive")
+      .map((p) => (p.target as { value: unknown }).value)
+      .filter((v): v is number => typeof v === "number");
+    if (nums.length === 0) return [];
+    const avg = Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 100) / 100;
+    return [
+      [
+        { role: "movie", target: { kind: "entity", entity: { id: r, context: "avgRating" } } },
+        { role: "avgRating", target: { kind: "primitive", value: avg } },
+      ],
+    ];
+  };
+  // The forgery probe for the replay check: same shape, quietly inflated output.
+  const tamperedFn: DerivedFn = (v, r) =>
+    avgFn(v, r).map((ptrs) =>
+      ptrs.map((p) =>
+        p.target.kind === "primitive" && typeof p.target.value === "number"
+          ? { ...p, target: { kind: "primitive" as const, value: p.target.value + 1 } }
+          : p,
+      ),
+    );
+  const spec: BindingSpec = {
+    name: "binding:avg",
+    fnId: "fn:avgRating",
+    materialization: "movie",
+    pure: true,
+    budget: 100,
+    emit: "supersede",
+  };
+  const botAuthor = bot.install(spec, avgFn, "f6".repeat(32));
+
+  // Arrival count through the latest emission's input (the rating that triggered it) —
+  // replay verification reconstructs the pinned input view from exactly this prefix.
+  let lastInputLen = 0;
+  const rate = (n: number, author: string): void => {
+    const before = reactor.arrivalLog().length;
+    bot.ingest(dataClaim("rating", n, author));
+    lastInputLen = before + 1;
+  };
+
+  bot.ingest(dataClaim("title", "Blade Runner", "did:key:zAlice"));
+  rate(9, "did:key:zCarol");
+  rate(8, "did:key:zDana");
+
+  const ratingsOut = el("div", { class: "meta" });
+  const receiptOut = el("pre", { class: "code" });
+  const verifyOut = el("div", {});
+
+  const latestEmission = (): Delta | undefined => {
+    const log = reactor.arrivalLog();
+    for (let i = log.length - 1; i >= 0; i--) {
+      const d = log[i]!;
+      if (d.claims.author !== botAuthor) continue;
+      if (d.claims.pointers.some((p) => p.role === "negates")) continue;
+      return d;
+    }
+    return undefined;
+  };
+
+  const render = (): void => {
+    const view = reactor.materializedView("movie", root);
+    const ratings = view ? (view.props.get("rating") ?? []) : [];
+    ratingsOut.textContent = `${ratings.length} ratings on record: ${ratings
+      .map((e) => valueOf(e.delta.claims))
+      .join(", ")}`;
+    const emitted = latestEmission();
+    if (emitted === undefined) {
+      receiptOut.textContent = "(no emission yet — rate the movie)";
+      return;
+    }
+    const prov = (suffix: string): string => {
+      const p = emitted.claims.pointers.find((x) => x.role === `${VOCAB_PREFIX}.derived.${suffix}`);
+      if (p === undefined) return "?";
+      if (p.target.kind === "primitive") return String(p.target.value);
+      if (p.target.kind === "entity") return p.target.entity.id;
+      return p.target.kind;
+    };
+    receiptOut.textContent = [
+      `avgRating = ${valueOf(emitted.claims)}`,
+      ``,
+      `author  ${emitted.claims.author.slice(0, 32)}…  (the bot's own keypair)`,
+      `id      ${emitted.id.slice(0, 32)}…`,
+      `${VOCAB_PREFIX}.derived.by    = ${prov("by")}`,
+      `${VOCAB_PREFIX}.derived.from  = ${prov("from").slice(0, 24)}…  (the exact input view, pinned byte for byte)`,
+      `${VOCAB_PREFIX}.derived.under = ${prov("under")}`,
+    ].join("\n");
+    verifyOut.replaceChildren();
+  };
+
+  const verify = (): void => {
+    const emitted = latestEmission();
+    if (emitted === undefined) return;
+    // Rebuild the pinned input from first principles: a fresh reactor fed the arrival
+    // prefix up to and including the triggering rating, nothing else.
+    const probe = new Reactor();
+    probe.register("movie", body, [root]);
+    for (const d of reactor.arrivalLog().slice(0, lastInputLen)) probe.ingest(d);
+    const viewHex = probe.materializedHex("movie", root);
+    const view = probe.materializedView("movie", root);
+    if (view === undefined || viewHex === undefined) return;
+    const genuine = verifyPureDerivation(emitted, spec, avgFn, view, root, viewHex);
+    const tampered = verifyPureDerivation(emitted, spec, tamperedFn, view, root, viewHex);
+    verifyOut.replaceChildren(
+      el(
+        "div",
+        { class: genuine ? "ok" : "error" },
+        genuine
+          ? "✓ replay verified — re-ran the function on the pinned input; the recomputed content address matches the claim's id, and the signature checks out"
+          : "✗ replay FAILED — this receipt does not check out",
+      ),
+      el(
+        "div",
+        { class: tampered ? "error" : "ok" },
+        tampered
+          ? "✗ the tampered function ALSO verified — that would be a bug"
+          : "✓ and a tampered function (+1 to every average) fails the same replay — forgery is detectable, not just discouraged",
+      ),
+    );
+    flash(verifyOut);
+  };
+
+  const buttons = el("div", { class: "controls" });
+  for (const n of [6, 7, 8, 9, 10]) {
+    const b = el("button", {}, `rate ${n}`);
+    b.onclick = () => {
+      rate(n, "did:key:zYou");
+      render();
+    };
+    buttons.append(b);
+  }
+  const verifyBtn = el(
+    "button",
+    { class: "big", style: "margin-top:0.8em" },
+    "🔍 replay-verify the receipt",
+  );
+  verifyBtn.onclick = verify;
+
+  host.append(
+    el("div", { class: "panel-title" }, "rate the movie (as did:key:zYou)"),
+    buttons,
+    ratingsOut,
+    el(
+      "div",
+      { class: "panel-title" },
+      "the bot's latest claim — an ordinary signed delta, carrying its receipt",
+    ),
+    receiptOut,
+    verifyBtn,
+    verifyOut,
+  );
+  render();
+}
+
 // --- stats badge ----------------------------------------------------------------------------------
 
 function renderStats(): void {
@@ -1021,6 +1213,7 @@ widgetSuperposition();
 widgetHistory();
 widgetFederation();
 widgetReplay();
+widgetDerivation();
 widgetConformance();
 refreshWorldA();
 

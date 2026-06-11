@@ -218,6 +218,15 @@ plus polish (README status update, top-level parity runner, CI).
   caught a real silent regression: the demo's R1 candidate lookup keyed on the old role).
   Verified: 117/117 in-browser across both witnesses, demo prints avgRating=9, zero console
   errors.
+- **Tour §7 "Computation is an author"** ✅ — the M5 story, live: a ratings bot
+  (DerivationHost + native-fn derived author with its own keypair) watches the movie
+  materialization; rate buttons trigger the write-back loop; the bot's signed claim renders
+  with its full receipt (author, id, rdb.derived.by/from/under); a replay-verify button
+  reconstructs the pinned input view from the arrival prefix (the derivation test's probe
+  recipe), re-runs the fn, and checks the recomputed content address — plus the tampered-fn
+  (+1) counter-demo failing the same replay. Proof section renumbered §8, its derived-author
+  paragraph deduped. Verified in-browser: avg 8.5→9 on rate-10, ✓ genuine / ✗ tampered, zero
+  console errors. The tour now walks all of L0→L7.
 - **GitHub Pages** — blocked on a permission: needs the human to enable Pages (main, /docs)
   in repo settings; README already points at https://mbilokonsky.github.io/rhizomatic/.
 

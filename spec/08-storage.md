@@ -21,36 +21,55 @@ These are absolute; everything else in this document is implementation latitude.
 1. **Never hash the dehydrated form.** Identity, signatures, set membership, dedup, reconciliation digests — all are computed over canonical hydrated bytes, always. If a packed copy and a loose copy of the same delta could disagree about their own id, the CRDT element type fractures and union stops meaning union.
 2. **Compression never dictates semantics.** Dehydration exploits the *common case* (member author equals manifest author; member timestamp near manifest timestamp; member covered by manifest signature) without ever mandating it. A delta whose fields diverge from its envelope is stored with explicit fields — less compactly, identically legally. Any pack format that cannot represent divergent members is non-conformant. (This is the guard against re-smuggling the container model: members are sovereign at L1; L0 merely bets that they usually travel in families.)
 
+Operationally: unpacking rebuilds full claims and recomputes every id through the standard delta-construction path — a record that does not rehydrate to its canonical bytes fails the content-address check and the unpack MUST error. Divergent members carry explicit fields; the format cannot *not* represent them. Round-trip vectors include a divergent-author member and a multiply-claimed member.
+
 ## 3. Pack Format
 
-A pack is a content-addressed file:
+A pack is **one canonical CBOR item in the Rhizomatic profile** (SPEC-1 §4.1): both witnesses
+share the codec, identical delta sets produce identical pack bytes, and
+`packId = contentAddress(pack bytes)` follows for free.
 
 ```
-Pack {
-  header:     { version, dictRef?: Hash }       // optional shared-dictionary reference
-  strings:    StringTable                        // interned entity ids, roles, contexts
-  envelopes:  ManifestRecord[]                   // hydrated rhizomatic.txn manifests (these ARE deltas)
-  members:    MemberRecord[]                     // dehydrated member deltas
-  loose:      DeltaRecord[]                      // hydrated deltas claimed by no stored manifest
-  index:      { deltaId → (section, offset) }   // random access without full scan
+Pack = map {
+  "version":   1,
+  "strings":   [tstr...],          // sorted unique string table (roles, ids, authors, contexts,
+                                   //  delta-ref hexes, string primitives, sig hexes)
+  "envelopes": [Record...],        // hydrated rhizomatic.txn manifests, sorted by manifest id
+  "members":   [MemberRecord...],  // dehydrated members, sorted by member id
+  "loose":     [Record...],        // hydrated deltas claimed by no stored manifest, sorted by id
 }
-packId = multihash(canonical pack bytes)
+
+Record       = map { "a": authorIdx, "t": timestamp, "p": [Ptr...], "s"?: sigIdx }
+MemberRecord = map { "m": envelopeIdx, "p": [Ptr...],
+                     "a"?: authorIdx,   // only when it differs from the manifest's (invariant 2)
+                     "dt"?: number,     // timestamp minus manifest timestamp; omitted when 0
+                     "s"?: sigIdx }     // stored whenever present (sigs are kept verbatim)
+Ptr = map { "r": roleIdx, "e"|"d"|"s": idx | "n": number | "b": bool, "c"?: ctxIdx }
+      // e=EntityRef id, d=DeltaRef hex, s=string primitive, n=number, b=bool; c=context
 ```
+
+All indices are positions in `strings` (numbers in the profile's float encoding — small ints are
+f16, so the cost is modest). Determinism is total: same delta set ⇒ same pack bytes ⇒ same packId.
 
 ### 3.1 Dehydration rules (MemberRecord)
 
 Relative to the referencing manifest's envelope:
 
-- `author` — omitted when equal to the manifest's author; else stored explicitly. (Presence bitmap per record.)
-- `timestamp` — stored as a zigzag varint offset from the manifest timestamp; offset 0 is one byte.
-- `sig` — omitted when the member is manifest-covered (SPEC-1 §5); else stored.
-- `pointers` — roles, contexts, and entity ids replaced by string-table indices; primitive values stored canonically (or dictionary-compressed in bulk sections).
-- A member claimed by multiple manifests is stored once, dehydrated against one (implementation's choice); the others reference it through the index.
+- `author` — omitted when equal to the manifest's author; else stored explicitly.
+- `dt` — the member's timestamp minus the manifest's; omitted when 0.
+- `sig` — stored verbatim whenever present (manifest coverage governs *transport* requirements,
+  SPEC-1 §5, not storage).
+- A member claimed by several manifests is stored once, dehydrated against the
+  **lexicographically first** claiming manifest in the pack. Deltas whose claiming manifest is
+  absent from the set are stored loose, fully hydrated.
 
-### 3.2 Dictionaries
+### 3.2 Deferred physical conveniences
 
-- The string table is per-pack and mandatory.
-- `dictRef` MAY name a shared trained dictionary (e.g., zstd) for primitive-value sections — vocabulary strings and common values repeat across years of log; cross-pack dictionaries are where the long-term compression lives. Dictionaries are themselves content-addressed artifacts and MAY be federated like any blob (SPEC-6 §6). A pack MUST be decodable by a party holding the pack and its named dictionary, and nothing else.
+The random-access index (`deltaId → (section, offset)`), shared trained dictionaries
+(`dictRef`, themselves content-addressed and federable like any blob), and ranged/partial reads
+are deferred: packs currently decode wholesale in memory, so an index buys nothing. They return
+when packs become reactor checkpoints over real I/O; nothing in the §2 invariants constrains
+those additions.
 
 ## 4. The Rehydration Contract
 

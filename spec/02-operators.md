@@ -69,7 +69,7 @@ Normative properties:
 
 - **Total and terminating:** evaluating any `Pred` against any delta is O(|delta|). No recursion, no fixpoints, no data dereference — a predicate sees one delta at a time, never the rest of the set (this preserves context-freeness at the instruction level). Anything requiring cross-delta logic (e.g., "select only corroborated claims") is not expressible here by design; it belongs at L7 (SPEC-7), where a derived author can compute corroboration and assert it as a delta that *then* becomes selectable.
 - **Value predicates are single-delta:** `targetValue` compares the primitive sitting on a pointer of *this* delta; comparison across primitives of different deltas is cross-delta logic and excluded. Mixed-type comparisons resolve by the canonical type order of SPEC-5 §4.
-- **Value predicates are indexable:** `ValMatch` over `(context, value)` pairs is the contract behind the reactor's value index (SPEC-4 §3), making range queries (`releaseYear between 1990–1999`) sublinear.
+- **Value predicates are indexable:** `ValMatch` over `(role, value)` pairs is the contract behind the reactor's value index (SPEC-4 §3), making range queries (`releaseYear between 1990–1999`) sublinear. (Primitive targets carry no context — SPEC-1 §2 — so the pointer's role is what names a primitive payload.)
 - **Decidable subsumption (goal):** for the reactor's dispatch optimization, implementations SHOULD be able to test `Pred₁ ⊑ Pred₂` (every delta matching 1 matches 2). The grammar is kept within a decidable fragment for this reason; extensions MUST preserve it.
 - `timestamp` comparisons enable time-travel as a filter (`match(timestamp, lte, T)`); per SPEC-1 §6 these range over *claimed* time.
 

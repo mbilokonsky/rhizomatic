@@ -34,7 +34,13 @@ Stages:
 5. **Update** — apply incremental maintenance to affected materializations (§4.3).
 6. **Notify** — emit change events to subscribers (§5).
 
-Stream order is a transport artifact. Because L1 semantics are set-based and evaluation is order-blind, **any ingestion order of the same deltas MUST converge to the same materializations** (this is the CRDT guarantee surfaced at L4, and it is what makes federation catch-up trivial: replaying a peer's log in any order, with any interleaving, converges).
+`ingest(delta)` returns exactly one of three outcomes: **accepted** (validated, persisted,
+indexed), **duplicate** (id already in the log — a no-op everywhere downstream), or
+**rejected(reason)** — the content address does not recompute, the claims fail L1 validation, or
+a present signature fails verification (SPEC-1 §5; unsigned deltas remain legal). Rejected
+deltas leave no trace in the log or indexes: rejected, never repaired.
+
+Stream order is a transport artifact. Because L1 semantics are set-based and evaluation is order-blind, **any ingestion order of the same deltas MUST converge to the same materializations** (this is the CRDT guarantee surfaced at L4, and it is what makes federation catch-up trivial: replaying a peer's log in any order, with any interleaving, converges). Convergence is a tested contract, not an aspiration: conformant implementations property-test random ingestion permutations — including negations arriving before their targets — for identical set digests, identical index contents, and identical evaluation results, and incremental materializations extend the same property against batch evaluation as the oracle (§1).
 
 ## 3. Storage Profile (Normative Minimum)
 
@@ -44,7 +50,7 @@ A Level-2-conformant reactor MUST maintain:
 - **The id index:** `Hash → Delta` (required for `DeltaRef` chasing, dedup, and Merkle verification).
 - **The target index:** `EntityId → DeltaId[]` over pointer targets (required for `select(hasPointer(targetEntity: …))` to beat O(|D|)).
 - **The negation index:** `Hash → DeltaId[]` mapping each delta to negations targeting it (required for `mask` and for §4.3's non-monotone repair).
-- **The value index:** `(context, primitive) → DeltaId[]` over primitive pointer targets, ordered within each context (required whenever registered terms use `ValMatch` predicates — SPEC-2 §3 — so that range queries are sublinear; MAY be lazy/partial for contexts no registered term touches).
+- **The value index:** `(role, primitive) → DeltaId[]` over primitive pointer targets, ordered within each role (required whenever registered terms use `ValMatch` predicates — SPEC-2 §3 — so that range queries are sublinear; MAY be lazy/partial for roles no registered term touches). The key is the pointer's *role* because primitive targets carry no context in the wire format (SPEC-1 §2): the thing that names a primitive payload is its pointer's role.
 
 All further indexes are materializations registered as schema terms — there is no second index machinery (§4).
 

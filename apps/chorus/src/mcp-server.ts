@@ -73,12 +73,28 @@ const TOOLS = [
   {
     name: "begin-session",
     description:
-      "Introduce this session: bind its author keypair to your model name and purpose. Call at the start of a conversation so every claim you make is attributable to THIS session — and call it AGAIN if your serving model changes mid-conversation (e.g. a refusal failover): introductions read as intervals, so each claim attributes to the model in effect at its timestamp, never relabeled wholesale.",
+      "Introduce this session: bind its author keypair to your model name and declared intent. Call at the start of a conversation so every claim you make is attributable to THIS session — and call it AGAIN if your serving model OR your topic changes mid-conversation (e.g. a refusal failover, a pivot): introductions read as intervals, so each claim attributes to the introduction in effect at its timestamp. Declared topics become your briefing's scope.",
     inputSchema: {
       type: "object",
       properties: {
         model: { type: "string", description: "your model id, e.g. claude-fable-5" },
         purpose: { type: "string", description: "one line on what this session is doing" },
+        topics: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Entity ids this session is ABOUT (e.g. 'proj:chorus') — these scope your briefing. A value ending in ':' scopes a whole id-prefix family (e.g. 'synchronicity:'). Reference real ids: try topics/search first rather than inventing new ones.",
+        },
+        surface: {
+          type: "string",
+          description:
+            "Where this session lives: 'claude-code' | 'claude-desktop' | 'claude-web' | 'api' | …",
+        },
+        mode: {
+          type: "string",
+          description:
+            "Interaction type: 'work' | 'conversation' | 'research' | 'retrospective' | …",
+        },
       },
       required: ["model"],
     },
@@ -92,8 +108,17 @@ const TOOLS = [
   {
     name: "briefing",
     description:
-      "What to have top-of-mind, computed fresh: the user's preferences, open tasks, recent sessions (with their summaries), top topics, CONTESTED facts (where the record disagrees with itself), and standing distrust edits. Call right after begin-session.",
-    inputSchema: { type: "object", properties: {} },
+      "What to have top-of-mind, computed fresh THROUGH YOUR DECLARED SCOPE: the user's preferences (always global — they're about the human), in-scope open tasks, recent sessions (shared-topic sessions first), in-scope topics, in-scope CONTESTED facts (out-of-scope contests return as a count in contestedElsewhere — explore them via topics/recall if relevant), and standing distrust edits. Scope defaults to your begin-session topics; pass topics here to override; no topics anywhere = the global view. Call right after begin-session.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        topics: {
+          type: "array",
+          items: { type: "string" },
+          description: "Override scope: entity ids, or trailing-':' prefix patterns.",
+        },
+      },
+    },
   },
   {
     name: "remember",
@@ -289,6 +314,9 @@ export interface SessionContext {
   readonly userSeedHex: string;
   readonly userAuthor: string;
   model: string; // declared at begin-session; "unknown" until then, and visibly so
+  topics: string[]; // declared intent: what this session is about (briefing scope)
+  surface?: string; // where the session lives: claude-code | claude-desktop | …
+  mode?: string; // interaction type: work | conversation | research | retrospective…
   introduced: boolean;
   readonly clock: () => number;
 }
@@ -312,14 +340,25 @@ export function createSession(opts: SessionOptions): SessionContext {
     userSeedHex: uSeed,
     userAuthor: new ChorusAgent({ name: "user", seedHex: uSeed }).author,
     model: "unknown",
+    topics: [],
     introduced: false,
     clock: opts.clock ?? (() => Date.now()),
   };
 }
 
-// Bind the session author to its model + purpose — one signed identity claim (identity.ts).
-function introduce(ctx: SessionContext, model: string, purpose?: string): void {
+interface Intent {
+  readonly purpose?: string;
+  readonly topics?: readonly string[];
+  readonly surface?: string;
+  readonly mode?: string;
+}
+
+// Bind the session author to its model + intent — one signed identity claim (identity.ts).
+function introduce(ctx: SessionContext, model: string, intent: Intent = {}): void {
   ctx.model = model;
+  if (intent.topics !== undefined) ctx.topics = [...intent.topics];
+  if (intent.surface !== undefined) ctx.surface = intent.surface;
+  if (intent.mode !== undefined) ctx.mode = intent.mode;
   ctx.introduced = true;
   const t = ctx.clock();
   ctx.agent.record({
@@ -328,7 +367,10 @@ function introduce(ctx: SessionContext, model: string, purpose?: string): void {
       sessionId: ctx.sessionId,
       model,
       startedAt: t,
-      ...(purpose === undefined ? {} : { purpose }),
+      ...(intent.purpose === undefined ? {} : { purpose: intent.purpose }),
+      ...(intent.topics === undefined ? {} : { topics: intent.topics }),
+      ...(intent.surface === undefined ? {} : { surface: intent.surface }),
+      ...(intent.mode === undefined ? {} : { mode: intent.mode }),
     }),
   });
 }
@@ -365,13 +407,24 @@ export function callTool(
   const asUser = args["speaker"] === "user";
   switch (name) {
     case "begin-session": {
-      introduce(ctx, str(args["model"]) ?? "unknown", str(args["purpose"]));
+      const topics = Array.isArray(args["topics"])
+        ? args["topics"].filter((t): t is string => typeof t === "string")
+        : undefined;
+      introduce(ctx, str(args["model"]) ?? "unknown", {
+        ...(str(args["purpose"]) === undefined ? {} : { purpose: str(args["purpose"])! }),
+        ...(topics === undefined ? {} : { topics }),
+        ...(str(args["surface"]) === undefined ? {} : { surface: str(args["surface"])! }),
+        ...(str(args["mode"]) === undefined ? {} : { mode: str(args["mode"])! }),
+      });
       persist?.();
       return {
         sessionId: ctx.sessionId,
         sessionAuthor: agent.author,
         userAuthor: ctx.userAuthor,
         model: ctx.model,
+        topics: ctx.topics,
+        ...(ctx.surface === undefined ? {} : { surface: ctx.surface }),
+        ...(ctx.mode === undefined ? {} : { mode: ctx.mode }),
       };
     }
     case "whoami":
@@ -380,6 +433,9 @@ export function callTool(
         sessionAuthor: agent.author,
         userAuthor: ctx.userAuthor,
         model: ctx.model,
+        topics: ctx.topics,
+        ...(ctx.surface === undefined ? {} : { surface: ctx.surface }),
+        ...(ctx.mode === undefined ? {} : { mode: ctx.mode }),
         introduced: ctx.introduced,
       };
     case "remember": {
@@ -417,8 +473,17 @@ export function callTool(
       }
       return agent.recall(str(args["entity"]) ?? "", opts);
     }
-    case "briefing":
-      return briefing(agent, ctx.userAuthor);
+    case "briefing": {
+      const override = Array.isArray(args["topics"])
+        ? args["topics"].filter((t): t is string => typeof t === "string")
+        : undefined;
+      const scopeTopics = override ?? ctx.topics;
+      return briefing(
+        agent,
+        ctx.userAuthor,
+        scopeTopics.length === 0 ? undefined : { topics: scopeTopics },
+      );
+    }
     case "revise": {
       const old = agent.peer.reactor.get(str(args["deltaId"]) ?? "");
       if (old === undefined) throw new Error(`revise: unknown delta ${String(args["deltaId"])}`);

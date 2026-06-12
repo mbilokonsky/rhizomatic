@@ -4,7 +4,7 @@
 
 import { evalTerm, parseTerm, type Delta } from "@rhizomatic/core";
 import type { ChorusAgent } from "./agent.js";
-import { topics, type Topic } from "./discovery.js";
+import { sameAsClass, topics, type Topic } from "./discovery.js";
 import { identityIndex } from "./identity.js";
 import {
   ROLE_ABOUT,
@@ -89,15 +89,67 @@ export interface SessionSummary {
   readonly purpose?: string;
   readonly summary?: string;
   readonly endedAt?: number;
+  readonly topics?: readonly string[];
+}
+
+// A briefing scope: what this session declared itself to be ABOUT (begin-session topics).
+// Real entity ids scope exactly; a trailing-":" value scopes a whole id-prefix family.
+export interface BriefingScope {
+  readonly topics: readonly string[];
 }
 
 export interface Briefing {
-  readonly preferences: readonly BeliefRow[]; // how the human wants things, latest per slot
-  readonly openTasks: readonly BeliefRow[]; // task-kind beliefs, latest per slot
+  readonly preferences: readonly BeliefRow[]; // ALWAYS global: they are about the principal,
+  // who is party to every session — scope governs what's about the world, not the user
+  readonly openTasks: readonly BeliefRow[]; // task-kind beliefs, latest per slot, in scope
   readonly recentSessions: readonly SessionSummary[];
   readonly topics: readonly Topic[];
   readonly contested: readonly { entity: string; attribute: string; values: unknown[] }[];
   readonly distrusted: readonly { author: string; reason?: string; by: string }[];
+  readonly scope?: { declared: readonly string[]; entities: number };
+  // Disagreement outside the scope is never hidden — it compresses to an honest count.
+  // Discoverable beats injected: the contests are one topics/recall away.
+  readonly contestedElsewhere?: number;
+}
+
+// Surviving belief deltas whose value is an entity REFERENCE: (about, referent) pairs.
+// These are the typed edges remember {value: {entity}} writes — the scope crawls them.
+function referencePairs(deltas: readonly Delta[]): Array<[string, string]> {
+  const pairs: Array<[string, string]> = [];
+  for (const d of deltas) {
+    let about: string | undefined;
+    let ref: string | undefined;
+    for (const p of d.claims.pointers) {
+      if (p.role === ROLE_ABOUT && p.target.kind === "entity") {
+        if (p.target.entity.context !== undefined) about = p.target.entity.id;
+      } else if (p.role === ROLE_VALUE && p.target.kind === "entity") {
+        ref = p.target.entity.id;
+      }
+    }
+    if (about !== undefined && ref !== undefined) pairs.push([about, ref]);
+  }
+  return pairs;
+}
+
+// Expand declared topics into the in-scope entity set: exact ids, their sameAs equivalence
+// classes, prefix-pattern matches — then one hop along typed references, both directions.
+function scopeEntities(
+  agent: ChorusAgent,
+  alive: readonly Delta[],
+  declared: readonly string[],
+  allEntities: readonly string[],
+): Set<string> {
+  const exact = declared.filter((t) => !t.endsWith(":"));
+  const prefixes = declared.filter((t) => t.endsWith(":"));
+  const seeds = new Set<string>(exact);
+  for (const id of exact) for (const member of sameAsClass(agent, id)) seeds.add(member);
+  for (const e of allEntities) if (prefixes.some((p) => e.startsWith(p))) seeds.add(e);
+  const inScope = new Set(seeds);
+  for (const [about, ref] of referencePairs(alive)) {
+    if (seeds.has(about)) inScope.add(ref);
+    if (seeds.has(ref)) inScope.add(about);
+  }
+  return inScope;
 }
 
 // Standing trust edits in the store, applied to this agent's lens (non-writing).
@@ -125,11 +177,26 @@ export function rehydrateTrust(
   return edits;
 }
 
-export function briefing(agent: ChorusAgent, userAuthor?: string): Briefing {
+export function briefing(agent: ChorusAgent, userAuthor?: string, scope?: BriefingScope): Briefing {
   const distrusted = rehydrateTrust(agent); // the lens honors standing edits before reading
   const alive = surviving(agent);
   const rows = beliefRows(alive);
   const identities = identityIndex(agent.snapshot(), userAuthor);
+
+  // The lens: a session that declared topics reads the world through them. No declaration =
+  // the global view (small stores, fresh users, the console — the keyholder's seat).
+  const allTopics = topics(agent, { limit: Number.MAX_SAFE_INTEGER });
+  const declared = scope?.topics ?? [];
+  const inScope =
+    declared.length === 0
+      ? undefined
+      : scopeEntities(
+          agent,
+          alive,
+          declared,
+          allTopics.map((t) => t.entity),
+        );
+  const within = (entity: string) => inScope === undefined || inScope.has(entity);
 
   // Session summaries: identity claims joined with summary/endedAt beliefs at session:<id>.
   const sessions = new Map<string, SessionSummary>();
@@ -140,6 +207,7 @@ export function briefing(agent: ChorusAgent, userAuthor?: string): Briefing {
       model: id.model ?? "unknown",
       ...(id.startedAt === undefined ? {} : { startedAt: id.startedAt }),
       ...(id.purpose === undefined ? {} : { purpose: id.purpose }),
+      ...(id.topics === undefined ? {} : { topics: id.topics }),
     });
   }
   for (const { row } of rows) {
@@ -152,21 +220,26 @@ export function briefing(agent: ChorusAgent, userAuthor?: string): Briefing {
       sessions.set(sid, { ...s, endedAt: row.value });
     }
   }
+  // Continuity is per project, not per wall-clock: sessions sharing a declared topic first.
+  const sharesScope = (s: SessionSummary): number =>
+    (s.topics ?? []).some((t) => declared.includes(t) || (inScope?.has(t) ?? false)) ? 1 : 0;
   const recentSessions = [...sessions.values()]
-    .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
+    .sort((a, b) => sharesScope(b) - sharesScope(a) || (b.startedAt ?? 0) - (a.startedAt ?? 0))
     .slice(0, 5);
 
   // Contested: every entity whose attributes carry >1 surviving value — disagreement,
-  // surfaced. The scan is unbounded on purpose: disagreement does not expire by recency,
-  // and a capped scan reads as "no contests" when it means "not recently touched".
-  const top = topics(agent, { limit: 10 });
+  // surfaced. The SCAN is unbounded on purpose (disagreement does not expire by recency);
+  // the BROADCAST is scoped: in-scope contests in full, the rest as an honest count.
   const contested: { entity: string; attribute: string; values: unknown[] }[] = [];
-  for (const t of topics(agent, { limit: Number.MAX_SAFE_INTEGER })) {
+  let contestedElsewhere = 0;
+  for (const t of allTopics) {
     const all = agent.recallAll(t.entity);
     if (typeof all !== "object" || Array.isArray(all)) continue;
     for (const [attribute, value] of Object.entries(all)) {
       if (Array.isArray(value) && new Set(value.map((v) => JSON.stringify(v))).size > 1) {
-        contested.push({ entity: t.entity, attribute, values: value.slice(0, 4) });
+        if (within(t.entity))
+          contested.push({ entity: t.entity, attribute, values: value.slice(0, 4) });
+        else contestedElsewhere += 1;
       }
     }
   }
@@ -174,10 +247,19 @@ export function briefing(agent: ChorusAgent, userAuthor?: string): Briefing {
   const notInternal = (r: BeliefRow) => !r.entity.startsWith("session:");
   return {
     preferences: latestOfKind(rows, "preference").filter(notInternal).slice(0, 15),
-    openTasks: latestOfKind(rows, "task").filter(notInternal).slice(0, 15),
+    openTasks: latestOfKind(rows, "task")
+      .filter(notInternal)
+      .filter((r) => within(r.entity))
+      .slice(0, 15),
     recentSessions,
-    topics: top,
+    topics: (inScope === undefined
+      ? allTopics
+      : allTopics.filter((t) => inScope.has(t.entity))
+    ).slice(0, 10),
     contested: contested.slice(0, 10),
     distrusted,
+    ...(inScope === undefined
+      ? {}
+      : { scope: { declared, entities: inScope.size }, contestedElsewhere }),
   };
 }

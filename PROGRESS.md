@@ -20,10 +20,13 @@
 > discovery (topics/search/sameAs), the briefing protocol (contested scan unbounded),
 > entity-REFERENCE values over MCP ("reference, don't transcribe"), decide/replay, the
 > console; `claude mcp add chorus …` per the README is the tested path, installed live, and
-> dogfooded on real data. Open work, in value order: scoped briefings (per-topic lenses +
-> curator-author digests — the user's standing design direction); real embedding model for
-> the librarian; log compaction at scale; Rust-side chorus if product-layer parity is wanted;
-> the WASM host ABI proposal; deeper alias vectors (SPEC-9 §8).
+> dogfooded on real data. Slice K made the briefing a LENS: begin-session declares structured
+> intent (topics/surface/mode, interval-bound identity claims) and the briefing scopes
+> through it — in-scope contests in full, the rest an honest count. Open work, in value
+> order: salience-as-author (curator digests as rankable claims — the second half of the
+> user's design direction); real embedding model for the librarian; log compaction at scale;
+> Rust-side chorus if product-layer parity is wanted; the WASM host ABI proposal; deeper
+> alias vectors (SPEC-9 §8).
 > The working agreement holds: vectors first, two witnesses in lockstep for anything
 > normative, checkpoint commits on main, artifacts read as designed-from-the-start.
 
@@ -356,6 +359,24 @@ with Claude's native memory, then past it (receipts, contradiction surfacing, se
 distrust). Slices, each usable + committed: A identity ✅ · B shared store · C discovery ·
 D briefing/MX · E real-client handshake · F beyond-parity affordances.
 chorus/README.md is the product doc and grows with each slice.
+
+- **Slice K — the briefing is a lens (structured session intent).** ✅ — the user's design
+  verdict ("never a global perpetual summary"), operationalized: a general briefing is a
+  global lens, the one artifact the architecture forbids. `begin-session` now takes
+  structured intent — **topics** (entity ids; trailing-":" = prefix family), **surface**
+  (claude-code/desktop/…), **mode** (work/conversation/…) — all claims on the introduction
+  delta (`chorus.identity.topic/surface/mode`), interval-bound like the model name. Topics
+  encode the use–mention distinction: real ids travel as contextless entity REFERENCES,
+  prefix patterns as strings. Declared topics scope the briefing: exact ids + sameAs classes
+  + prefix matches + ONE HOP along typed references (slice J's edges pay off — declare the
+  synchronicity, its composed-of events fall into scope structurally). In-scope tasks/topics/
+  contests in full; out-of-scope contests compress to `contestedElsewhere`, an honest count
+  (the SCAN stays unbounded; the BROADCAST is scoped). Shared-topic sessions outrank fresher
+  unrelated ones (continuity per project, not per wall-clock). Two invariants: preferences
+  are ALWAYS global (about the principal, who is party to every session); the console stays
+  panoptic (the unbounded view is the keyholder's seat). No topics = global view, unchanged.
+  Still open from the design note: salience-as-author (curator digests as rankable claims).
+  Suite 268 (57 chorus).
 
 - **Slice J — first-contact learnings operationalized.** ✅ — the inaugural dogfood session
   (91 deltas, live store) plus its retrospective produced three findings, all shipped:

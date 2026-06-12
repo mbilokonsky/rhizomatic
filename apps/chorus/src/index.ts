@@ -22,7 +22,13 @@ export {
   type DecisionInput,
   type Replay,
 } from "./decisions.js";
-export { briefing, rehydrateTrust, type Briefing, type SessionSummary } from "./briefing.js";
+export {
+  briefing,
+  rehydrateTrust,
+  type Briefing,
+  type BriefingScope,
+  type SessionSummary,
+} from "./briefing.js";
 export { startConsole, type ConsoleHandle, type ConsoleOptions } from "./console.js";
 export { declareConcept, slotId } from "./concepts.js";
 export {

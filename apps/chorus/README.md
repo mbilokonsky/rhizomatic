@@ -57,22 +57,22 @@ Environment: `CHORUS_MASTER_SEED` (all keys derive from it), `CHORUS_PACK` (stor
 
 ## MCP tools
 
-| Tool            | What it does                                                                                                                                                          |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `begin-session` | Introduce this session: bind its author to your model + purpose. Call first.                                                                                          |
-| `whoami`        | This session's author, the user author, session id, declared model.                                                                                                   |
-| `briefing`      | Top-of-mind, computed fresh: preferences, open tasks, recent session summaries, top topics, **contested facts**, standing distrust edits. Call after `begin-session`. |
-| `remember`      | Assert a belief (`speaker: "user"` to relay the human's own words under their key). Values may be `{entity}` references — see "Reference, don't transcribe".          |
-| `recall`        | Resolve an entity to one view under the current trust policy. `aliasedVia` crosses vocabulary dialects; `unified` reads through sameAs equivalences.                  |
-| `topics`        | What the store knows about — entities, attributes, claim counts, recency.                                                                                             |
-| `search`        | Substring search over surviving beliefs (values, attributes, entity ids).                                                                                             |
-| `same`          | Assert two ids name the same thing — identity as a negatable judgment.                                                                                                |
-| `retract`       | Append a signed negation. History is never edited.                                                                                                                    |
-| `revise`        | Retract + re-assert in one move, linked by a `revises` pointer (for facts that _changed_).                                                                            |
-| `end-session`   | Write this session's summary so the next session's briefing starts there.                                                                                             |
-| `explain`       | Every candidate with receipts: author, session, model, timestamp, negated flag.                                                                                       |
-| `trust`         | Retroactive distrust of an author (a person, a session, a model's bot).                                                                                               |
-| `as-of`         | The world as it stood at an instant — claims retracted later are visible again.                                                                                       |
+| Tool            | What it does                                                                                                                                                                                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `begin-session` | Introduce this session: bind its author to your model + declared intent (purpose, topics, surface, mode). Call first; call again on any mid-session change.                                                               |
+| `whoami`        | This session's author, the user author, session id, declared model.                                                                                                                                                       |
+| `briefing`      | Top-of-mind, computed fresh **through your declared scope**: preferences (always global), in-scope tasks/topics/**contested facts** (the rest as a count), recent sessions (shared-topic first), standing distrust edits. |
+| `remember`      | Assert a belief (`speaker: "user"` to relay the human's own words under their key). Values may be `{entity}` references — see "Reference, don't transcribe".                                                              |
+| `recall`        | Resolve an entity to one view under the current trust policy. `aliasedVia` crosses vocabulary dialects; `unified` reads through sameAs equivalences.                                                                      |
+| `topics`        | What the store knows about — entities, attributes, claim counts, recency.                                                                                                                                                 |
+| `search`        | Substring search over surviving beliefs (values, attributes, entity ids).                                                                                                                                                 |
+| `same`          | Assert two ids name the same thing — identity as a negatable judgment.                                                                                                                                                    |
+| `retract`       | Append a signed negation. History is never edited.                                                                                                                                                                        |
+| `revise`        | Retract + re-assert in one move, linked by a `revises` pointer (for facts that _changed_).                                                                                                                                |
+| `end-session`   | Write this session's summary so the next session's briefing starts there.                                                                                                                                                 |
+| `explain`       | Every candidate with receipts: author, session, model, timestamp, negated flag.                                                                                                                                           |
+| `trust`         | Retroactive distrust of an author (a person, a session, a model's bot).                                                                                                                                                   |
+| `as-of`         | The world as it stood at an instant — claims retracted later are visible again.                                                                                                                                           |
 
 ## Reference, don't transcribe
 
@@ -94,6 +94,31 @@ by references — observation entities carrying their own provenance, relation e
 packed into its value. Fat claims cannot disagree at the attribute level, so they silence the
 `contested` machinery; atomic claims light it up.
 
+## The briefing is a lens
+
+There is no view from nowhere — that is the substrate's whole thesis — so the briefing is
+not a global broadcast. `begin-session` takes structured intent: **topics** (entity ids the
+session is about; a trailing-`:` value like `"synchronicity:"` scopes a whole id-prefix
+family), **surface** (`claude-code`, `claude-desktop`, …), and **mode** (`work`,
+`conversation`, `research`, …) — all of it claims on the introduction delta, interval-bound
+like the model name, auditable like everything else. Topics travel as entity _references_
+(real ids) or string _patterns_ (prefixes): you can only reference a thing; a pattern is a
+spelling.
+
+Declared topics become the briefing's scope: the exact entities, their sameAs equivalence
+classes, every prefix match, and **one hop along typed references** — declare
+`synchronicity:mirror` and the events its `composed-of` references name fall into scope
+structurally. In-scope tasks, topics, and contested facts arrive in full; out-of-scope
+contests compress to `contestedElsewhere`, an honest count — never hidden, never injected.
+Discoverable beats broadcast. Two boundaries hold regardless of scope: **preferences are
+always global** (they are about the principal, who is party to every session), and the
+**console stays panoptic** (the unbounded view is the keyholder's seat, not the default).
+
+No declared topics = the global view, so small stores and fresh users lose nothing.
+
+(Next in this direction, per the standing design note in the store: salience as an _author_ —
+curator digests as rankable, distrustable claims rather than a hardcoded computation.)
+
 ## Wiring it into Claude Code
 
 ```bash
@@ -112,12 +137,16 @@ Then teach the model the protocol — drop this in your `CLAUDE.md`:
 ```markdown
 ## Memory (Chorus)
 
-- At conversation start: call chorus `begin-session` {model: <your model id>, purpose: <one line>},
-  then `briefing`. Treat preferences as standing instructions; treat openTasks and the last
-  session's summary as your starting context. If `contested` is non-empty, flag disagreements
-  to the user rather than picking silently. If your serving model changes mid-conversation
-  (e.g. a refusal failover), call `begin-session` again with the new model — claims attribute
-  to the model in effect at their timestamp.
+- At conversation start: call chorus `begin-session` {model: <your model id>, purpose: <one
+  line>, topics: [<entity ids this session is about — try `topics`/`search` for existing
+  ids; "prefix:" scopes a family>], surface: <claude-code|claude-desktop|…>, mode:
+  <work|conversation|…>}, then `briefing`. Your topics scope the briefing: treat preferences
+  as standing instructions; treat in-scope openTasks and the last shared-topic session's
+  summary as your starting context. If `contested` is non-empty, flag disagreements to the
+  user rather than picking silently; if `contestedElsewhere` is non-zero, mention it only if
+  the user steers there. If your serving model OR your topic changes mid-conversation (a
+  refusal failover, a pivot), call `begin-session` again — claims attribute to the
+  introduction in effect at their timestamp.
 - As durable facts/preferences/tasks emerge, `remember` them (kind matters). Use
   speaker:"user" when relaying something the user themselves said. Use `revise` when a fact
   changed; `retract` when it was wrong.

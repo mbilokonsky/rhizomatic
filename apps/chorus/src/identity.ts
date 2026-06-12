@@ -12,6 +12,9 @@ export const ROLE_ID_SESSION = `${CHORUS_PREFIX}.identity.session`;
 export const ROLE_ID_MODEL = `${CHORUS_PREFIX}.identity.model`;
 export const ROLE_ID_STARTED = `${CHORUS_PREFIX}.identity.startedAt`;
 export const ROLE_ID_PURPOSE = `${CHORUS_PREFIX}.identity.purpose`;
+export const ROLE_ID_TOPIC = `${CHORUS_PREFIX}.identity.topic`;
+export const ROLE_ID_SURFACE = `${CHORUS_PREFIX}.identity.surface`;
+export const ROLE_ID_MODE = `${CHORUS_PREFIX}.identity.mode`;
 export const CTX_IDENTITY = `${CHORUS_PREFIX}.identity`;
 
 export const sessionEntity = (sessionId: string): string => `session:${sessionId}`;
@@ -35,10 +38,19 @@ export interface SessionIdentity {
   readonly model: string;
   readonly startedAt: number;
   readonly purpose?: string;
+  // Structured intent, all of it claims on the introduction delta and interval-bound like
+  // the model name. Topics are what the session is ABOUT: real entity ids travel as
+  // contextless entity REFERENCES (reference without filing — SPEC-1 §2.3 consent; no
+  // backpointer pollution at the topic), while a trailing-":" value like "synchronicity:"
+  // is a prefix PATTERN and travels as a string. You can only reference a thing; a pattern
+  // is a spelling — the use–mention distinction, encoded in the delta.
+  readonly topics?: readonly string[];
+  readonly surface?: string; // where the session lives: claude-code | claude-desktop | …
+  readonly mode?: string; // interaction type: work | conversation | research | retrospective…
 }
 
 // The identity claim: one delta, authored and signed by the session key, filed at the session
-// entity. Binding author -> (model, session, start) is itself auditable data.
+// entity. Binding author -> (model, session, start, intent) is itself auditable data.
 export function identityPointers(info: SessionIdentity): Pointer[] {
   const pointers: Pointer[] = [
     {
@@ -54,6 +66,20 @@ export function identityPointers(info: SessionIdentity): Pointer[] {
   if (info.purpose !== undefined) {
     pointers.push({ role: ROLE_ID_PURPOSE, target: { kind: "primitive", value: info.purpose } });
   }
+  for (const topic of info.topics ?? []) {
+    pointers.push({
+      role: ROLE_ID_TOPIC,
+      target: topic.endsWith(":")
+        ? { kind: "primitive", value: topic }
+        : { kind: "entity", entity: { id: topic } },
+    });
+  }
+  if (info.surface !== undefined) {
+    pointers.push({ role: ROLE_ID_SURFACE, target: { kind: "primitive", value: info.surface } });
+  }
+  if (info.mode !== undefined) {
+    pointers.push({ role: ROLE_ID_MODE, target: { kind: "primitive", value: info.mode } });
+  }
   return pointers;
 }
 
@@ -64,6 +90,9 @@ export interface AuthorIdentity {
   readonly sessionId?: string;
   readonly startedAt?: number;
   readonly purpose?: string;
+  readonly topics?: readonly string[]; // entity ids + trailing-":" prefix patterns
+  readonly surface?: string;
+  readonly mode?: string;
 }
 
 type DeltaLike = {
@@ -90,6 +119,9 @@ export function identityIntroductions(
     let model: string | undefined;
     let startedAt: number | undefined;
     let purpose: string | undefined;
+    let surface: string | undefined;
+    let mode: string | undefined;
+    const topics: string[] = [];
     for (const p of d.claims.pointers) {
       if (p.role === ROLE_ID_SESSION && p.target.kind === "entity") {
         const id = p.target.entity.id;
@@ -100,6 +132,13 @@ export function identityIntroductions(
         if (typeof p.target.value === "number") startedAt = p.target.value;
       } else if (p.role === ROLE_ID_PURPOSE && p.target.kind === "primitive") {
         purpose = String(p.target.value);
+      } else if (p.role === ROLE_ID_TOPIC) {
+        if (p.target.kind === "entity") topics.push(p.target.entity.id);
+        else if (p.target.kind === "primitive") topics.push(String(p.target.value));
+      } else if (p.role === ROLE_ID_SURFACE && p.target.kind === "primitive") {
+        surface = String(p.target.value);
+      } else if (p.role === ROLE_ID_MODE && p.target.kind === "primitive") {
+        mode = String(p.target.value);
       }
     }
     if (sessionId === undefined || model === undefined) continue;
@@ -111,6 +150,9 @@ export function identityIntroductions(
       sessionId,
       ...(startedAt === undefined ? {} : { startedAt }),
       ...(purpose === undefined ? {} : { purpose }),
+      ...(topics.length === 0 ? {} : { topics }),
+      ...(surface === undefined ? {} : { surface }),
+      ...(mode === undefined ? {} : { mode }),
     });
     intros.set(d.claims.author, list);
   }

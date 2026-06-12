@@ -111,6 +111,104 @@ describe("chorus MX: the session lifecycle", () => {
     expect(callTool(s3, "recall", { entity: "svc:db" })).toEqual({ healthy: true });
   });
 
+  it("declared topics scope the briefing; out-of-scope contests compress to a count", () => {
+    const a = mk("builder-a", 1000);
+    callTool(a, "remember", {
+      about: "proj:alpha",
+      attribute: "blocker",
+      value: "alpha task",
+      kind: "task",
+    });
+    callTool(a, "remember", {
+      about: "proj:beta",
+      attribute: "blocker",
+      value: "beta task",
+      kind: "task",
+    });
+    callTool(a, "remember", { about: "proj:alpha", attribute: "owner", value: "team-a" });
+    callTool(a, "remember", { about: "proj:beta", attribute: "owner", value: "team-x" });
+    const b = mk("builder-b", 5000);
+    b.agent.importSet(a.agent.snapshot());
+    callTool(b, "remember", { about: "proj:alpha", attribute: "owner", value: "team-b" });
+    callTool(b, "remember", { about: "proj:beta", attribute: "owner", value: "team-y" });
+    callTool(b, "remember", {
+      about: "user:mike",
+      attribute: "tone",
+      value: "direct",
+      kind: "preference",
+      speaker: "user",
+    });
+
+    callTool(b, "begin-session", {
+      model: "claude-fable-5",
+      topics: ["proj:alpha"],
+      surface: "claude-code",
+      mode: "work",
+    });
+    const br = callTool(b, "briefing", {}) as Briefing;
+    expect(br.scope?.declared).toEqual(["proj:alpha"]);
+    expect(br.openTasks.map((t) => t.entity)).toEqual(["proj:alpha"]);
+    expect(br.contested.map((c) => c.entity)).toEqual(["proj:alpha"]);
+    expect(br.contestedElsewhere).toBe(1); // beta's dispute: never hidden, never broadcast
+    expect(br.topics.map((t) => t.entity)).toEqual(["proj:alpha"]);
+    // Preferences are about the principal, who is party to every session: always global.
+    expect(br.preferences.map((p) => p.value)).toContain("direct");
+
+    // An explicit empty scope asks for the global view — both contests in full.
+    const global = callTool(b, "briefing", { topics: [] }) as Briefing;
+    expect(global.scope).toBeUndefined();
+    expect(global.contested.map((c) => c.entity).sort()).toEqual(["proj:alpha", "proj:beta"]);
+  });
+
+  it("prefix topics scope id families; typed references pull the one-hop neighborhood in", () => {
+    const ctx = mk("crawler", 1000);
+    callTool(ctx, "remember", { about: "event:a", attribute: "what", value: "the event" });
+    callTool(ctx, "remember", {
+      about: "sync:x",
+      attribute: "composed-of",
+      value: { entity: "event:a" },
+    });
+    callTool(ctx, "remember", { about: "unrelated:z", attribute: "what", value: "noise" });
+    const other = mk("disputant", 5000);
+    other.agent.importSet(ctx.agent.snapshot());
+    callTool(other, "remember", {
+      about: "event:a",
+      attribute: "what",
+      value: "the event, revised",
+    });
+
+    callTool(other, "begin-session", { model: "claude-fable-5", topics: ["sync:"] });
+    const br = callTool(other, "briefing", {}) as Briefing;
+    // event:a is in scope only because sync:x REFERENCES it (slice J's typed edge).
+    expect(br.topics.map((t) => t.entity).sort()).toEqual(["event:a", "sync:x"]);
+    expect(br.contested.map((c) => c.entity)).toEqual(["event:a"]);
+    expect(br.contestedElsewhere).toBe(0);
+  });
+
+  it("recent sessions sharing a declared topic outrank fresher unrelated ones", () => {
+    const file = join(dir, "intent.jsonl");
+    const s1 = mk("alpha-work", 1000);
+    callTool(s1, "begin-session", { model: "claude-fable-5", topics: ["proj:alpha"] });
+    callTool(s1, "end-session", { summary: "alpha progress" });
+    new SharedStore(file).persist(s1.agent);
+    const s2 = mk("beta-work", 5000);
+    new SharedStore(file).refresh(s2.agent);
+    callTool(s2, "begin-session", { model: "claude-fable-5", topics: ["proj:beta"] });
+    callTool(s2, "end-session", { summary: "beta progress" });
+    new SharedStore(file).persist(s2.agent);
+
+    const s3 = mk("alpha-again", 9000);
+    new SharedStore(file).refresh(s3.agent);
+    callTool(s3, "begin-session", { model: "claude-fable-5", topics: ["proj:alpha"] });
+    const br = callTool(s3, "briefing", {}) as Briefing;
+    const ids = br.recentSessions.map((s) => s.sessionId);
+    // Continuity is per project, not per wall-clock: the older alpha session sorts first.
+    expect(ids.indexOf("alpha-work")).toBeLessThan(ids.indexOf("beta-work"));
+    expect(br.recentSessions.find((s) => s.sessionId === "alpha-work")!.summary).toBe(
+      "alpha progress",
+    );
+  });
+
   it("revise replaces in one move, linked and auditable", () => {
     const ctx = mk("rev", 1000);
     const r = callTool(ctx, "remember", {

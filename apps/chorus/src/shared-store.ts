@@ -26,24 +26,35 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+// Every path through this loop re-checks the deadline FIRST: no retry — stale-steal races,
+// transient Windows EPERM from antivirus/indexer touches, anything — can spin unbounded.
+// (v1 of this loop had two `continue` paths that skipped the check; a desktop session hung
+// on exactly that. A lock must be allowed to fail loudly; it must never be allowed to hang.)
 function withLock<T>(path: string, fn: () => T): T {
   const lockDir = `${path}.lock`;
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   for (;;) {
+    if (Date.now() > deadline) {
+      throw new Error(
+        `could not acquire ${lockDir} within ${LOCK_TIMEOUT_MS}ms — ` +
+          `if no other chorus session is mid-write, delete the directory and retry`,
+      );
+    }
     try {
       mkdirSync(lockDir);
       break;
-    } catch {
-      // Held by someone. Steal only if stale (a crashed process), else wait.
-      try {
-        if (Date.now() - statSync(lockDir).mtimeMs > LOCK_STALE_MS) {
-          rmdirSync(lockDir);
-          continue;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+        // Held by someone. Steal only if stale (a crashed process), else wait.
+        try {
+          if (Date.now() - statSync(lockDir).mtimeMs > LOCK_STALE_MS) {
+            rmdirSync(lockDir);
+            continue;
+          }
+        } catch {
+          // raced with a release or another stealer — loop (deadline-bounded)
         }
-      } catch {
-        continue; // raced with a release; retry immediately
       }
-      if (Date.now() > deadline) throw new Error(`could not acquire lock: ${lockDir}`);
       sleepSync(LOCK_RETRY_MS);
     }
   }

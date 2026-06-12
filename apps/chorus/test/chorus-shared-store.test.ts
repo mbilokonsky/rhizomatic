@@ -1,7 +1,15 @@
 // The shared store: concurrent sessions converge on one JSONL log. Two SessionContexts here
 // stand in for two server processes — separate reactors, one file.
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -80,6 +88,31 @@ describe("chorus: the shared store (many sessions, one world)", () => {
     sb.persist(b.agent);
     sa.refresh(a.agent);
     expect(callTool(a, "recall", { entity: "y" })).toEqual({ q: true, r: false });
+  });
+
+  it("a live foreign lock fails LOUDLY within the timeout — never hangs", () => {
+    const file = join(dir, "locked.jsonl");
+    const { a, sa } = twoSessions(file);
+    callTool(a, "remember", { about: "x", attribute: "p", value: 1 });
+    // Someone else is mid-write (fresh lock, live mtime) and never finishes.
+    mkdirSync(`${file}.lock`);
+    const t0 = Date.now();
+    expect(() => sa.persist(a.agent)).toThrow(/could not acquire/);
+    const elapsed = Date.now() - t0;
+    expect(elapsed).toBeGreaterThan(4_000); // it genuinely waited for the holder
+    expect(elapsed).toBeLessThan(20_000); // and it genuinely gave up (the v1 bug: spin forever)
+    rmSync(`${file}.lock`, { recursive: true, force: true });
+    expect(sa.persist(a.agent)).toBeGreaterThan(0); // recovers cleanly afterwards
+  }, 30_000);
+
+  it("a STALE lock (crashed writer) is stolen and the write proceeds", () => {
+    const file = join(dir, "stale.jsonl");
+    const { a, sa } = twoSessions(file);
+    callTool(a, "remember", { about: "y", attribute: "q", value: 2 });
+    mkdirSync(`${file}.lock`);
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(`${file}.lock`, old, old); // the holder died a minute ago
+    expect(sa.persist(a.agent)).toBeGreaterThan(0); // stolen, written, no drama
   });
 
   it("a fresh session loads the whole history from the log alone", () => {

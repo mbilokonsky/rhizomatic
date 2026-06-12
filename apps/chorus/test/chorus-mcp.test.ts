@@ -3,9 +3,9 @@
 
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { sessionSeed, userSeed } from "../chorus/identity.js";
-import { ChorusAgent } from "../chorus/index.js";
-import { callTool, createSession, handleRequest, serve } from "../chorus/mcp-server.js";
+import { sessionSeed, userSeed } from "../src/identity.js";
+import { ChorusAgent } from "../src/index.js";
+import { callTool, createSession, handleRequest, serve } from "../src/mcp-server.js";
 
 const clockFrom = (start: number) => {
   let t = start;

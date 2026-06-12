@@ -6,9 +6,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { startConsole, type ConsoleHandle } from "../chorus/console.js";
-import { SharedStore } from "../chorus/shared-store.js";
-import { callTool, createSession } from "../chorus/mcp-server.js";
+import { startConsole, type ConsoleHandle } from "../src/console.js";
+import { SharedStore } from "../src/shared-store.js";
+import { callTool, createSession } from "../src/mcp-server.js";
 
 const clockFrom = (start: number) => {
   let t = start;

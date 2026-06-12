@@ -4,11 +4,12 @@
 
 Rhizomatic is not a database. A database is one kind of machine you can build on top of it. Rhizomatic is the format underneath: a way of writing down anything anyone claims about anything, such that any two collections of such claims can be combined by set union — no migration, no coordination protocol, no merge conflicts, no central authority deciding what's true.
 
-This repository contains the specification AND two parallel implementations — TypeScript and
-Rust — built in lockstep against a shared conformance-vector suite ([vectors/](vectors)). All six
-milestones (M0-M5, conformance Levels 0-4) are implemented in both. See
-[PROGRESS.md](PROGRESS.md) for the full build log and
-[§ For the Implementer](#for-the-implementer) for the rules of engagement.
+This repository contains the specification, two parallel implementations — TypeScript and
+Rust — built in lockstep against a shared conformance-vector suite ([vectors/](vectors)), and
+the first real application built on top: **[Chorus](apps/chorus)**, memory for LLM agents
+where every belief is a signed claim. All six substrate milestones (M0-M5, conformance Levels
+0-4) are implemented in both witnesses. See [PROGRESS.md](PROGRESS.md) for the full build log
+and [§ For the Implementer](#for-the-implementer) for the rules of engagement.
 
 **See it run:** the docs site is live at **https://mbilokonsky.github.io/rhizomatic/** —
 a landing page leading to the interactive tour and the agent-memory case. Locally: open
@@ -23,7 +24,9 @@ through each — then has Rust reproduce, byte for byte, every delta you author 
 
 For the terminal version: `cd implementations/ts && npm install && npm run demo` — a seven-act
 story covering superposition, policy lenses, retraction + audit views, time travel, federation,
-derived authors, and packs.
+derived authors, and packs. Then `cd apps/chorus && npm install && npm run chorus:demo` for the
+application built on top of it all: agent memory with per-session authors, adjudication, decision
+replay, retroactive distrust, and semantic convergence — every step printing its receipts.
 
 ---
 
@@ -61,6 +64,11 @@ The full stack, each layer specified in its own document:
 | L1 | **Deltas** — the atom; the wire format | [SPEC-1](spec/01-delta.md) |
 | L0 | **Storage Profile** — packs; physical compression beneath an invariant logical form | [SPEC-8](spec/08-storage.md) |
 
+Above the stack sit two further documents: [SPEC-9](spec/09-alias.PROPOSAL.md) (proposal:
+concepts with oriented slots, mapping claims, and the `aliased` closure — accountable semantic
+convergence, vectored in both witnesses) and [Note 10](spec/10-patch-theory.NOTE.md) (how this
+design relates to darcs/Pijul patch theory, and the one piece of their machinery we refuse).
+
 Start with [SPEC-0](spec/00-overview.md): the six load-bearing principles, the architecture, and the conformance philosophy.
 
 Where this sits among its neighbors: JSON is portable but has no merge semantics. Git forks and merges but has no semantics — it merges text and hands conflicts to humans. RDF has semantics and federation but thin provenance and no superposition. Datomic has immutable facts but one transactor, one truth. Event sourcing has the log but couples it to one application's interpretation. Rhizomatic is the cell in that table nothing occupies: **portable format + n-ary relations + provenance inside the atom + conflicts in superposition + merge-is-union.** Every design decision in `spec/` exists to keep all five properties true simultaneously.
@@ -96,14 +104,34 @@ You may be a person. You may be a Claude instance reading this at the top of a f
 
 **Style of the thing.** Prefer boring code at L0–L2 — these layers aspire to be the kind of software that gets rewritten in five languages by strangers. Save the cleverness for the reactor's dispatch structures and the pack formats, where it pays. And when you hit a fork in the road the spec doesn't cover, you have the design tradition to steer by: *when in doubt, push authority toward the edges, keep the kernel inspectable, and make the judgment a signed claim rather than a hidden mechanism.*
 
+## The First Application: Chorus
+
+[apps/chorus](apps/chorus) is agent memory built on the substrate — and the proof that the
+"consequences, not features" wager pays. An agent is a keypair, a reactor, and a policy. Every
+Claude session is a distinct author bound to its model by a signed identity claim; the human is
+one persistent author; concurrent sessions share an append-only store and converge by union. On
+top of those mechanics: a briefing that surfaces what the record *disagrees about* instead of
+silently keeping the last write, decisions replayable byte-for-byte against exactly what was
+known, retroactive distrust of an author / a session / an entire model in one signed edit, a
+librarian that converges vocabularies through negatable judgment claims, an MCP server
+(sixteen tools — drop-in memory for any agent framework), and a local web console with live
+receipts and an as-of time scrubber. See the [Chorus README](apps/chorus/README.md) for the
+`claude mcp add` wiring and the model-side protocol.
+
 ## Status
 
-Specification draft **with two working witnesses**: TypeScript (190+ tests) and Rust (85+ tests),
-parity-verified byte-for-byte against shared vectors at every layer — canonical CBOR, content
-addressing, Ed25519 signatures, the eight-operator algebra, resolution policies, the
-schemas-as-deltas bootstrap, the incremental reactor, packs, federation, and derivation. Gaps
-and contradictions found during implementation are recorded in per-spec ERRATA files
-(`spec/*.ERRATA.md`) — including two genuine spec bugs the conformance suite caught.
+Specification draft **with two working witnesses and one working application**: TypeScript
+(211 tests) and Rust (50+ tests across 20 suites) parity-verified byte-for-byte against shared
+vectors at every layer — canonical CBOR, content addressing, Ed25519 signatures, the
+eight-operator algebra (including parameterized terms and the SPEC-9 alias closure), resolution
+policies, the schemas-as-deltas bootstrap, the incremental reactor, packs, federation, and
+derivation — plus Chorus (49 tests) consuming the TypeScript witness as an ordinary dependency.
+The interactive tour at the docs site runs the committed vectors through BOTH witnesses in your
+browser (the Rust one as WebAssembly): 149/149. Cross-implementation HTTP federation is proven
+(a Rust peer converging with a live TypeScript server to identical canonical digests). Gaps and
+contradictions found during implementation are recorded in per-spec ERRATA files
+(`spec/*.ERRATA.md`) — including genuine spec bugs the conformance suite caught — and every
+resolved erratum has been folded back into the spec documents themselves.
 The dream is old; this articulation of it is new. The arc that produced it — assembly language for data → portable IR → format-with-a-guaranteed-algebra → closed kernel with a sovereign userland — is preserved in the spec documents' structure itself, and the documents are the durable residue of that thinking.
 
-Mushrooms versus towers, all the way down. Now we find out if it compiles.
+Mushrooms versus towers, all the way down. It compiles.

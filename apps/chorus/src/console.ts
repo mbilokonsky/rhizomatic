@@ -5,7 +5,7 @@
 //   npm run chorus:console     (CHORUS_STORE, CHORUS_MASTER_SEED, CHORUS_CONSOLE_PORT)
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { authorForSeed } from "../src/index.js";
+import { authorForSeed } from "@rhizomatic/core";
 import { ChorusAgent } from "./agent.js";
 import { briefing } from "./briefing.js";
 import { recallUnified, sameAsClass, search, topics } from "./discovery.js";
@@ -237,7 +237,7 @@ load();setInterval(load,5000);
 // Direct run.
 if (
   process.argv[1] !== undefined &&
-  process.argv[1].replace(/\\\\/g, "/").replace(/\\/g, "/").endsWith("chorus/console.ts")
+  process.argv[1].replace(/\\\\/g, "/").replace(/\\/g, "/").endsWith("src/console.ts")
 ) {
   const opts: ConsoleOptions = {
     storePath: process.env["CHORUS_STORE"] ?? "chorus-memory.jsonl",

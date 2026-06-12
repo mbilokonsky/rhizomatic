@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { ChorusAgent, latest, restore, savePack, trustFirst } from "../chorus/index.js";
+import { ChorusAgent, latest, restore, savePack, trustFirst } from "../src/index.js";
 
 // Deterministic clocks: each agent claims times from its own fixed sequence.
 const clockFrom = (start: number) => {

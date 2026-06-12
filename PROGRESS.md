@@ -11,9 +11,9 @@
 > remember/recall/retract/explain/trust/as-of, protocol loop smoke-tested in-process).
 > docs/agents.html says "What we built" and links the runnable demo.
 >
-> **To resume:** read CLAUDE.md + this file + implementations/ts/chorus/README.md (the
+> **To resume:** read CLAUDE.md + this file + apps/chorus/README.md (the
 > product doc). Verify green: `node tools/check-all.mjs`. Run the story: `cd
-> implementations/ts && npm run chorus:demo`. **The MX arc (slices A–E) shipped Chorus as
+> apps/chorus && npm run chorus:demo`. **The MX arc (slices A–E) shipped Chorus as
 > installable session memory** — per-session model authors, persistent user author, shared
 > multi-process JSONL store, discovery (topics/search/sameAs), the briefing protocol, and a
 > spawned-server real-client handshake test; `claude mcp add chorus …` per the README is the
@@ -353,6 +353,17 @@ with Claude's native memory, then past it (receipts, contradiction surfacing, se
 distrust). Slices, each usable + committed: A identity ✅ · B shared store · C discovery ·
 D briefing/MX · E real-client handshake · F beyond-parity affordances.
 chorus/README.md is the product doc and grows with each slice.
+
+- **Slice I — Chorus extracted to apps/chorus; README refresh.** ✅ — Chorus is now its own
+  package (`chorus`, private) at apps/chorus — src/ + test/ + tools/ + README — depending on
+  the witness as an ordinary npm dependency (`@rhizomatic/core: file:../../implementations/ts`;
+  the core package gained `exports` pointing at its TS source). The dependency points the
+  right way: apps consume the witness, never the reverse; nothing in apps/ is normative
+  (CLAUDE.md records the rule). Core suite back to its substrate-only 211; Chorus 49 standalone;
+  check-all.mjs and CI both gained the Chorus gate. docs/agents.html + READMEs repathed. Root
+  README rewritten to current truth: apps/ in the layout, SPEC-9/Note-10 in the spec list, the
+  Chorus section, status with real counts ("It compiles."). Eventual destiny (own repo + real
+  npm dep) needs only publishing @rhizomatic/core — the seam is already cut.
 
 - **Slice H — polish.** ✅ — chorus:demo gains ACT 7 (two sessions, one user-signed
   preference, the briefing carrying Monday's summary into Tuesday — the MX story inside the

@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
-import { DeltaSet, claimsToJson, makeDelta, parseClaims } from "../src/index.js";
+import { DeltaSet, claimsToJson, makeDelta, parseClaims } from "@rhizomatic/core";
 import type { ChorusAgent } from "./agent.js";
 
 const LOCK_STALE_MS = 10_000;

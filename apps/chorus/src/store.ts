@@ -4,7 +4,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { packId, packSet, unpackSet, type DeltaSet } from "../src/index.js";
+import { packId, packSet, unpackSet, type DeltaSet } from "@rhizomatic/core";
 import type { ChorusAgent } from "./agent.js";
 
 // Write the agent's world to disk. Returns the pack's content address.

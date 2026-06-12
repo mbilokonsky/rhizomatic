@@ -14,9 +14,6 @@
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
     "gen-vectors": "tsx tools/gen-vectors.ts",
     "demo": "tsx demo/demo.ts",
-    "chorus:demo": "tsx chorus/demo.ts",
-    "chorus:mcp": "tsx chorus/mcp-server.ts",
-    "chorus:console": "tsx chorus/console.ts",
     "playground:build": "esbuild demo/playground/playground.ts --bundle --format=iife --outfile=demo/playground/bundle.js",
     "docs:build": "esbuild demo/tour/tour.ts --bundle --format=iife --outfile=../../docs/tour.bundle.js && esbuild demo/playground/playground.ts --bundle --format=iife --outfile=../../docs/playground.bundle.js"
   },
@@ -36,5 +33,10 @@
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.15.0",
     "vitest": "^2.1.0"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
   }
 }

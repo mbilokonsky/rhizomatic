@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { main } from "../chorus/demo.js";
+import { main } from "../src/demo.js";
 
 describe("the chorus demo", () => {
   it("walks the whole thesis end-to-end, deterministically", () => {

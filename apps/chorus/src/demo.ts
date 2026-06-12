@@ -247,9 +247,6 @@ export function main(): string {
 }
 
 // Direct run: print the transcript.
-if (
-  process.argv[1] !== undefined &&
-  process.argv[1].replace(/\\/g, "/").endsWith("chorus/demo.ts")
-) {
+if (process.argv[1] !== undefined && process.argv[1].replace(/\\/g, "/").endsWith("src/demo.ts")) {
   console.log(main());
 }

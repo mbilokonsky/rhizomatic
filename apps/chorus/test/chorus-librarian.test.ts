@@ -9,7 +9,7 @@ import {
   MockEmbeddingModel,
   declareConcept,
   slotId,
-} from "../chorus/index.js";
+} from "../src/index.js";
 
 const clockFrom = (start: number) => {
   let t = start;

@@ -16,10 +16,17 @@ reference implementation: any codebase that passes the vectors is a first-class 
 spec/                  Normative specification — the source of truth for BEHAVIOR.
 vectors/               Language-agnostic conformance vectors — the source of truth for CORRECTNESS.
 implementations/
-  ts/                  TypeScript implementation.
+  ts/                  TypeScript implementation (@rhizomatic/core).
   rust/                Rust implementation.
+apps/
+  chorus/              Chorus — agent memory built ON the format (its own package; depends on
+                       @rhizomatic/core; product layer, not substrate; destined for its own repo).
 ERRATA.md              (created per spec doc, on demand) recorded spec/impl contradictions.
 ```
+
+Apps consume the witness as a dependency — never the reverse. Normative behavior lives only in
+spec/ + vectors/ + implementations/; anything in apps/ is free to move fast (no vectors, no
+two-witness requirement, TS-only is fine).
 
 Two implementations grow up **in parallel and in lockstep**. They are not a primary and a port —
 they are two independent witnesses to the same spec. When they disagree, the spec or the vectors
@@ -107,5 +114,7 @@ Filled in as each implementation is scaffolded.
 
 - TypeScript: `cd implementations/ts && npm test`
 - Rust: `cd implementations/rust && cargo test`
-- Parity (both witnesses, one command): `node tools/check-all.mjs` from the repo root
+- Chorus (app layer): `cd apps/chorus && npm test` · demo `npm run chorus:demo` ·
+  MCP server `npm run chorus:mcp` · console `npm run chorus:console`
+- Parity (both witnesses + the app layer, one command): `node tools/check-all.mjs` from the repo root
 - CI: `.github/workflows/ci.yml` runs both green-gates + a vector-freshness check on every push

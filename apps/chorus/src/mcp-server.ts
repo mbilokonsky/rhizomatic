@@ -615,7 +615,7 @@ export function serve(
 // Direct run: a persistent agent over stdio.
 if (
   process.argv[1] !== undefined &&
-  process.argv[1].replace(/\\/g, "/").endsWith("chorus/mcp-server.ts")
+  process.argv[1].replace(/\\/g, "/").endsWith("src/mcp-server.ts")
 ) {
   const masterSeedHex =
     process.env["CHORUS_MASTER_SEED"] ?? process.env["CHORUS_SEED_HEX"] ?? "0f".repeat(32);

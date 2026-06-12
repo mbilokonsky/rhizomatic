@@ -2,7 +2,7 @@
 // DECISION REPLAY, and RETROACTIVE DISTRUST — the three set pieces, scripted and deterministic.
 
 import { describe, expect, it } from "vitest";
-import { VOCAB_PREFIX } from "../src/index.js";
+import { VOCAB_PREFIX } from "@rhizomatic/core";
 import {
   ChorusAdjudicator,
   ChorusAgent,
@@ -10,7 +10,7 @@ import {
   replayDecision,
   trustFirst,
   type Candidate,
-} from "../chorus/index.js";
+} from "../src/index.js";
 
 const clockFrom = (start: number) => {
   let t = start;

@@ -14,7 +14,7 @@ import {
   type HView,
   type Pointer,
   type Primitive,
-} from "../src/index.js";
+} from "@rhizomatic/core";
 import type { ChorusAgent } from "./agent.js";
 import { CHORUS_PREFIX, ROLE_ABOUT, ROLE_KIND, ROLE_VALUE } from "./vocab.js";
 

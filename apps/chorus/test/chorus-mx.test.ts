@@ -5,9 +5,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { SharedStore } from "../chorus/shared-store.js";
-import { callTool, createSession, type SessionContext } from "../chorus/mcp-server.js";
-import type { Briefing } from "../chorus/briefing.js";
+import { SharedStore } from "../src/shared-store.js";
+import { callTool, createSession, type SessionContext } from "../src/mcp-server.js";
+import type { Briefing } from "../src/briefing.js";
 
 const clockFrom = (start: number) => {
   let t = start;

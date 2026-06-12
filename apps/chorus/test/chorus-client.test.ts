@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const serverPath = resolve(here, "../chorus/mcp-server.ts");
+const serverPath = resolve(here, "../src/mcp-server.ts");
 const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
 
 const dir = mkdtempSync(join(tmpdir(), "chorus-client-"));

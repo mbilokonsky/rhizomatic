@@ -3,7 +3,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startConsole } from "../chorus/console.js";
+import { startConsole } from "../src/console.js";
 
 const dir = mkdtempSync(join(tmpdir(), "console-parse-"));
 const h = await startConsole({

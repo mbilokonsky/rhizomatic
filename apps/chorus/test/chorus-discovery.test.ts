@@ -2,8 +2,8 @@
 // registry: convergence is asserted, negatable, and read through per-reader trust.
 
 import { describe, expect, it } from "vitest";
-import { callTool, createSession } from "../chorus/mcp-server.js";
-import { sameAsClass } from "../chorus/discovery.js";
+import { callTool, createSession } from "../src/mcp-server.js";
+import { sameAsClass } from "../src/discovery.js";
 
 const clockFrom = (start: number) => {
   let t = start;

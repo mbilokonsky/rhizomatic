@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Rhizomatic — Memory for agents</title>
+<meta name="description" content="A memory substrate for LLM agents where every belief is a signed claim: sovereign perspectives, auditable trust, and decisions replayable against exactly what was known." />
+<style>
+  :root {
+    --bg: #0f0f14;
+    --panel: #17171f;
+    --panel-2: #1c1c26;
+    --border: #2a2a38;
+    --text: #d8d8e0;
+    --dim: #8a8a9a;
+    --accent: #e8b04b;
+    --ok: #6fd08c;
+    --bad: #e06c75;
+    --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 17px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+    padding: 0.55em 1em; display: flex; gap: 1.2em; flex-wrap: wrap; align-items: baseline;
+    font-size: 0.85em;
+  }
+  nav a.brand { font-weight: 700; color: var(--text); letter-spacing: 0.02em; }
+  nav a { color: var(--dim); }
+  nav a:hover { color: var(--accent); text-decoration: none; }
+  main { max-width: 760px; margin: 0 auto; padding: 0 1.2em 6em; }
+  header.hero { padding: 4.5em 0 1em; }
+  h1 { font-size: 2.4em; margin: 0 0 0.2em; letter-spacing: -0.02em; }
+  .tagline { font-size: 1.2em; color: var(--text); margin: 0 0 1em; }
+  section { margin-top: 4em; }
+  h2 { font-size: 1.6em; letter-spacing: -0.01em; margin: 0 0 0.5em; }
+  h3 { font-size: 1.1em; margin: 1.5em 0 0.4em; }
+  p { margin: 0.8em 0; }
+  .aside { color: var(--dim); font-size: 0.92em; border-left: 2px solid var(--border); padding-left: 1em; margin: 1.2em 0; }
+  .mono { font-family: var(--mono); }
+  pre.code {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.8em 1em; overflow-x: auto; font-family: var(--mono); font-size: 0.8em;
+    line-height: 1.55; margin: 0.8em 0; white-space: pre-wrap; word-break: break-word;
+  }
+  table.map { border-collapse: collapse; width: 100%; font-size: 0.88em; margin: 1.2em 0; }
+  table.map td, table.map th { border: 1px solid var(--border); padding: 0.5em 0.75em; text-align: left; vertical-align: top; }
+  table.map th { color: var(--dim); font-weight: 600; }
+  table.map td.prim { font-family: var(--mono); font-size: 0.92em; color: var(--accent); white-space: nowrap; }
+  table.map td.built { color: var(--ok); font-family: var(--mono); font-size: 0.85em; white-space: nowrap; }
+  .demo {
+    background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 10px; padding: 1.1em 1.3em; margin: 1.4em 0;
+  }
+  .demo .name { font-weight: 700; }
+  footer { margin-top: 6em; padding-top: 1.5em; border-top: 1px solid var(--border); color: var(--dim); font-size: 0.9em; }
+  .footnav { display: flex; gap: 1.5em; flex-wrap: wrap; margin-bottom: 1em; }
+</style>
+</head>
+<body>
+
+<nav>
+  <a class="brand" href="index.html">Rhizomatic</a>
+  <a href="#problem">The problem</a>
+  <a href="#mapping">The mapping</a>
+  <a href="#semantics">The semantic layer</a>
+  <a href="#capabilities">Capabilities</a>
+  <a href="#building">What we're building</a>
+  <a href="tour.html">The tour</a>
+  <a href="https://github.com/mbilokonsky/rhizomatic">GitHub</a>
+</nav>
+
+<main>
+
+<header class="hero">
+  <h1>Memory for agents</h1>
+  <p class="tagline">A memory substrate where every belief is a <strong>signed claim</strong> —
+  and an agent is just an author with a perspective.</p>
+  <p>LLM agents are about to be the most prolific writers and readers of shared knowledge in
+  existence, and the memory systems we're giving them were designed for none of what makes
+  them dangerous or useful. This page is the case for building agent memory on Rhizomatic —
+  not as one more storage option, but because the problems agent memory actually has are the
+  problems this format was built to dissolve.</p>
+</header>
+
+<section id="problem">
+  <h2>What's broken about agent memory today</h2>
+  <p>The current state of the art is some mixture of: a vector store (similarity soup with no
+  record of who asserted what, or when, or why), a scratchpad (a text file the agent rewrites,
+  destroying its own history), and maybe a shared database (one table, one truth, every agent
+  trampling the same rows). Each fails the same five ways:</p>
+  <p><strong>No provenance.</strong> A retrieved memory carries no record of which agent (or
+  which model version, or which human) put it there, from what evidence, at what time. When an
+  agent acts on a bad belief, there is nothing to trace.</p>
+  <p><strong>No perspective.</strong> Either every agent shares one memory (and one agent's
+  hallucination becomes everyone's fact) or each agent is an island (and nothing compounds).
+  There is no way to say: <em>we share the substrate, but I weigh sources my own way.</em></p>
+  <p><strong>Destructive revision.</strong> Updating a belief overwrites the old one. The
+  question every incident review needs — <em>what did the agent believe at the moment it
+  acted?</em> — is unanswerable by construction.</p>
+  <p><strong>Unaccountable similarity.</strong> The vector index's opinions about what
+  "matches" are opaque, unversioned, and silently change on reindex. Semantic drift is
+  invisible until it bites.</p>
+  <p><strong>No trust management.</strong> When an agent turns out to be compromised, buggy, or
+  just running a worse model, there is no way to discount everything it ever wrote without
+  surgically deleting history — which destroys the audit trail you need most at exactly that
+  moment.</p>
+</section>
+
+<section id="mapping">
+  <h2>The mapping</h2>
+  <p>Here is the part that reads like a trick, and isn't: every one of those failures maps to
+  a primitive this format already defines, specifies, and tests in two independent
+  implementations. Nothing below is roadmap — it's the substrate the
+  <a href="tour.html">tour</a> runs live in your browser.</p>
+
+  <table class="map">
+    <tr><th>Agent memory needs…</th><th>Rhizomatic primitive</th><th>Status</th></tr>
+    <tr><td>Every belief attributable: which agent, which model, when, from what</td><td class="prim">signed deltas; provenance inside the atom</td><td class="built">built · SPEC-1</td></tr>
+    <tr><td>Agents disagree without corrupting each other</td><td class="prim">superposition — contradiction is data</td><td class="built">built · SPEC-2/5</td></tr>
+    <tr><td>Shared substrate, sovereign viewpoints</td><td class="prim">resolution policies; trust = byAuthorRank</td><td class="built">built · SPEC-5</td></tr>
+    <tr><td>"What did it believe when it acted?"</td><td class="prim">as-of lenses over an append-only log</td><td class="built">built · SPEC-4</td></tr>
+    <tr><td>Revision without erasure</td><td class="prim">negation — a new claim about an old claim</td><td class="built">built · SPEC-1 §7</td></tr>
+    <tr><td>Summarizers, dedupers, adjudicators — with receipts</td><td class="prim">derived authors; replay-verifiable provenance</td><td class="built">built · SPEC-7</td></tr>
+    <tr><td>One live verdict per subject, superseded cleanly</td><td class="prim">keyed emission</td><td class="built">built · SPEC-7 §5</td></tr>
+    <tr><td>Runaway loops contained, observably</td><td class="prim">budgets; signed suspension claims</td><td class="built">built · SPEC-7 §6</td></tr>
+    <tr><td>Fleets sync; offline agents converge later</td><td class="prim">federation = set union; lenses; admission</td><td class="built">built · SPEC-6</td></tr>
+    <tr><td>Durable, portable snapshots</td><td class="prim">packs — deterministic, self-verifying</td><td class="built">built · SPEC-8</td></tr>
+    <tr><td>Parameterized recall ("about entity X, since T")</td><td class="prim">holes — terms bound at invocation</td><td class="built">built · SPEC-2 §6</td></tr>
+    <tr><td>Semantic search that's accountable</td><td class="prim">the librarian — see below</td><td class="built">designed · §next</td></tr>
+  </table>
+
+  <p>An agent, in this system, is nothing exotic: <strong>a keypair, a reactor, and a
+  policy.</strong> Its beliefs are claims it signed. Its worldview is a lens it chose. Its
+  trust in others is data it can edit. Its history is an append-only log it cannot quietly
+  rewrite — and neither can anyone else.</p>
+</section>
+
+<section id="semantics">
+  <h2>The semantic layer: similarity with receipts</h2>
+  <p>The kernel is deterministic by law — no fuzzy matching below the read boundary, ever,
+  because two agents evaluating the same data must get byte-identical answers. So where does
+  semantic search live? <strong>Above the boundary, as an author.</strong></p>
+  <p>The <em>librarian</em> is a derived author wrapping an embedding model. It watches the
+  substrate and emits ordinary signed claims about meaning. Its unit of judgment is not
+  "these two strings are similar" — it's a mapping into <strong>concept nodes with oriented
+  slots</strong>. Two applications that never met describe employment differently:</p>
+
+  <pre class="code">app A:  person —[context: "employer"]→ company     company —[context: "employees"]→ person
+app B:  person —[context: "job"]→ company          company —[context: "staff"]→ person</pre>
+
+  <p>The librarian recognizes both as the same relation seen from its two ends, and emits
+  mapping claims into a concept frame:</p>
+
+  <pre class="code">concept:employment
+  slot employment#worker        ← "employees" (app A) · "staff" (app B)
+  slot employment#organization  ← "employer"  (app A) · "job"   (app B)
+
+each mapping: a signed claim — by embedding-model-X-v3, confidence 0.91,
+              over input snapshot 1e20…, negatable like anything else</pre>
+
+  <p>Slots make direction explicit — which end of the relation a vocabulary fragment names is
+  <em>which slot it maps to</em> — so "employer" and "staff" can converge without gluing the
+  wrong ends together. And because mappings are claims:</p>
+  <p><strong>Similarity has provenance</strong> (which model, which version, what input).
+  <strong>Similarity is negatable</strong> (a human or a better model overturns a bad mapping
+  with one negation — no reindex, no silent drift). <strong>Similarity is policy-weighted</strong>
+  (the embedding model is an author with a track record; your agent can demand human-endorsed
+  mappings while mine accepts model hunches). And when two librarians disagree about meaning,
+  the disagreement is held in superposition and resolved per reader — <strong>the semantic
+  layer itself lives in the CRDT.</strong></p>
+  <p class="aside">The honest boundary: nearest-neighbor lookup happens inside the librarian,
+  outside the kernel, and mappings lag new vocabulary by one librarian cycle — eventually
+  consistent, accountably. Most recall then becomes exact, deterministic closure queries over
+  materialized mappings; only genuinely novel queries pay a trip to the librarian, and even
+  then the query term it produces is inspectable. The vectors themselves never enter the
+  substrate — they are the librarian's private working memory, rebuildable at will. Judgments
+  are what persist.</p>
+</section>
+
+<section id="capabilities">
+  <h2>Three things you cannot do today</h2>
+
+  <div class="demo">
+    <p><span class="name">Decision replay.</span> An agent made a call three weeks ago that
+    looks wrong now. Scrub to the moment it acted: the exact belief set it resolved, under the
+    exact policy it held, including the claims that were later retracted — because retraction
+    appends, never erases. Incident review becomes a query, not an archaeology dig through
+    logs that were never designed to answer it.</p>
+  </div>
+
+  <div class="demo">
+    <p><span class="name">Retroactive distrust.</span> Agent K turns out to have been running
+    a poisoned model since Tuesday. Demote K in your resolution policy — one edit, to your own
+    data. Every belief downstream of K's testimony re-resolves instantly; everything
+    corroborated elsewhere stands; and K's full claim history remains intact and queryable,
+    which is precisely what the postmortem needs. No deletion. No rebuild. Trust is a lens,
+    and you just refocused it.</p>
+  </div>
+
+  <div class="demo">
+    <p><span class="name">Meaning under dispute.</span> Two teams' agents organize the same
+    domain with different vocabularies. Nobody runs a migration; nobody wins a meeting. The
+    librarian proposes the bridge as claims, a human endorses or vetoes them with a signature,
+    and each fleet's policies decide what the bridge is worth. Integration by judgment —
+    auditable, reversible judgment — instead of integration by committee.</p>
+  </div>
+
+  <p>Underneath all three is the same property: <strong>perspective without fragmentation.</strong>
+  Shared knowledge that compounds across a fleet, while every agent keeps its own epistemic
+  standards — and every standard, every judgment, every revision is itself inspectable data.</p>
+</section>
+
+<section id="building">
+  <h2>What we're building</h2>
+  <p>The substrate is done: specified across eight documents, implemented twice (TypeScript and
+  Rust), parity-verified byte-for-byte against a shared conformance suite, running live in the
+  <a href="tour.html">tour</a>. The memory system on top of it is in active design, building
+  outward in this order:</p>
+  <p><strong>The alias proposal</strong> — the concept/slot vocabulary and closure semantics,
+  spec'd and vectored with the same two-witness discipline as everything else. ·
+  <strong>The core library</strong> — agent handles (keypair + reactor + policy), a memory API
+  (<span class="mono">assert / retract / recall / asOf / explain</span>), pack-based
+  persistence. · <strong>Trust dynamics</strong> — the adjudicator as a derived author, decision
+  replay and retroactive distrust as first-class operations. · <strong>The librarian</strong> —
+  the embedding author and live semantic convergence. · <strong>Distribution</strong> — an MCP
+  server exposing all of it as drop-in memory for any agent framework, plus a console for the
+  humans: provenance dashboards, trust editing, a time scrubber over the fleet's shared world.</p>
+  <p>Progress is tracked in the open in
+  <a href="https://github.com/mbilokonsky/rhizomatic/blob/main/PROGRESS.md">PROGRESS.md</a>.</p>
+</section>
+
+<footer>
+  <div class="footnav">
+    <a href="index.html">Home</a>
+    <a href="tour.html">The interactive tour</a>
+    <a href="playground.html">The playground</a>
+    <a href="https://github.com/mbilokonsky/rhizomatic/blob/main/spec/00-overview.md">The spec</a>
+    <a href="https://github.com/mbilokonsky/rhizomatic">GitHub</a>
+  </div>
+  <p>Everything that computes is an author. Everything that remembers is accountable.</p>
+</footer>
+
+</main>
+</body>
+</html>

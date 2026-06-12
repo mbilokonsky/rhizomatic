@@ -1,22 +1,19 @@
 # Progress
 
-> **RESUME HERE (loop session, 2026-06-10).** The v0 charter is complete: M0-M5 in both
-> witnesses (TS 179 / Rust 80 tests, byte-for-byte parity), conformance vectors, green CI,
-> the CLI demo, the browser playground, the WASM ABI proposal, the HTTP federation binding in
-> both languages, and a LIVE cross-impl interop proof (identical digests over real HTTP).
-> **NEW: the sprint goal is now the "holy shit" artifact** — documentation good enough to send
-> to a technical stranger. First slice shipped: docs/ holds an interactive guided tour
-> (docs/index.html) + the playground (docs/playground.html), GitHub Pages-ready, every widget
-> running the real bundled implementation. Found & recorded ERRATA-2 E14 en route (annotate
-> channel does not survive select). Working tree committed after this slice.
+> **RESUME HERE (2026-06-11). THE NEXT ARC IS CHORUS — agent memory as the killer app.**
+> The substrate is finished and folded: M0-M5 in both witnesses (TS 190 / Rust 19 suites,
+> byte parity, CI green), vocabulary = rhizomatic.*, parameterized terms (holes) + keyed
+> emission shipped, ALL errata upstreamed into the spec docs (spec/ERRATA-REVIEW.md records
+> dispositions; five DECIDEs resolved). Docs are live on Pages: docs/index.html (landing) →
+> tour.html (the interactive tour, both witnesses in-browser) + agents.html (the agent-memory
+> case — read it first, it IS the product brief).
 >
-> **To resume:** read CLAUDE.md (working agreement) + this file. Verify green with
-> `node tools/check-all.mjs`. Preview the tour: launch config `docs` (or `npx serve docs`).
-> Open decisions awaiting the human: (1) ENABLE GITHUB PAGES (repo settings → Pages → deploy
-> from main /docs — the API call was permission-blocked); (2) the rdb.* vocabulary prefix;
-> (3) adopt/amend the WASM ABI proposal (spec/07-derivation-abi.PROPOSAL.md); (4) review the
-> spec ERRATA for upstreaming. Queued tour polish: §1 "same bytes from Rust" inline evidence,
-> mobile pass, an animated federation diagram, possibly an embedded spec reader.
+> **To resume:** read CLAUDE.md + this file + docs/agents.html + the "Chorus arc" section
+> below. Verify green: `node tools/check-all.mjs`. Preview: launch config `docs`. Then start
+> Phase 0 (spec/09-alias.PROPOSAL.md). The working agreement holds: vectors first, two
+> witnesses in lockstep for anything normative (the aliased closure is L2!), checkpoint
+> commits on main, artifacts read as designed-from-the-start.
+
 
 Living status for the build loop. Updated at the end of every slice; newest first. A fresh context
 window should be able to read this top-to-bottom and know exactly where things stand and what's next.
@@ -298,6 +295,46 @@ plus polish (README status update, top-level parity runner, CI).
   SPEC-8 the pinned pack layout (§3) + operationalized invariants (§2). Every errata entry is
   now either a one-line pointer (folded), a live KEEP (v0 profile/deferral), or a recorded
   decision. The errata files stay as the index; git carries the archaeology.
+
+## The Chorus arc (agent memory) — the next build
+
+Working name **Chorus** (provisional). One product thesis: a memory substrate for LLM agents
+where every belief is a signed claim — sovereign perspectives over shared knowledge,
+disagreement in superposition, trust as editable policy, decisions replayable against exactly
+what was known. docs/agents.html is the user-facing brief; this section is the build order.
+
+- **Phase 0 — spec/09-alias.PROPOSAL.md.** The `rhizomatic.alias.*` vocabulary: concept
+  entities with ORIENTED SLOTS (e.g. employment#worker / employment#organization); mapping
+  claims (vocabulary fragment → slot, with confidence + librarian provenance); the `aliased`
+  closure for selects (static expansion at term-validation time, SPEC-5 §6's deferred hook).
+  Key design points already settled in discussion: slot-level mapping solves relation
+  DIRECTION (which end a fragment names = which slot it maps to) and avoids pairwise O(n²);
+  canonical relation signature = the (role, context) pairs of a delta's entity pointers,
+  sorted by the E3 total order; embedding VECTORS never enter the rhizome (librarian-private
+  cache, rebuildable) — only judgment claims persist; the embedding model is an AUTHOR (new
+  model version = new author = own track record, rankable by policy). `aliased` is L2 →
+  vectors + both witnesses before any Chorus code consumes it.
+- **Phase 1 — chorus-core** (implementations/ts/… or packages/chorus): Agent handle
+  (keypair + reactor + policy + offered lenses), memory API (assert / retract / recall /
+  asOf / explain), a small belief vocabulary (observations, facts, preferences, task state),
+  pack-to-disk persistence (v0-sufficient). Scripted multi-agent tests, deterministic in CI.
+- **Phase 2 — trust dynamics.** Adjudicator as derived author using KEYED EMISSION (one live
+  verdict per subject — already built, SPEC-7 §5); the two set-piece capabilities as
+  first-class operations + tests: DECISION REPLAY (resolve at the as-of instant an agent
+  acted, retracted claims visible) and RETROACTIVE DISTRUST (demote an author in policy →
+  world re-resolves, history intact).
+- **Phase 3 — the librarian.** Effectful derived author wrapping an embedding model, emitting
+  slot-mapping claims per Phase 0; live employer/staff-style convergence demo; alias-closure
+  recall goes live. (Scripted/mock embeddings for CI; real model optional at runtime.)
+- **Phase 4 — distribution.** An MCP SERVER exposing Chorus as drop-in memory for any agent
+  framework (tools: remember / recall / retract / explain / trust / as-of) — the adoption
+  move — plus a console UI (tour tech): provenance dashboard, belief timelines, trust editor,
+  time scrubber. Docs page gains live widgets as pieces land.
+
+Trio note: the earlier three-example concept (Bindery / Chorus / Commons) collapsed into this
+single product thesis on review — the shrinkwrap idea survives inside Chorus as the typed
+write surface an agent gets (mutation helpers, SPEC-4 §6), and the Commons survives as the
+console + federation story. One argument, not three demos.
 
 ## Queued next (in value order)
 

@@ -10,10 +10,10 @@
 >
 > **To resume:** read CLAUDE.md + this file + docs/agents.html + the "Chorus arc" section
 > below. Verify green: `node tools/check-all.mjs`. Preview: launch config `docs`.
-> **Phases 0–1 are done** (SPEC-9 + eval-aliased vectors in both witnesses, 149/149 in-browser;
-> chorus-core with the full memory API) — see the Chorus build log below. Next: **Phase 2,
-> trust dynamics** (adjudicator via keyed emission; decision replay + retroactive distrust as
-> first-class operations).
+> **Phases 0–2 are done** (SPEC-9 + eval-aliased vectors in both witnesses, 149/149 in-browser;
+> chorus-core with the full memory API; adjudicator + decision replay + retroactive distrust)
+> — see the Chorus build log below. Next: **Phase 3, the librarian** (effectful derived author
+> emitting SPEC-9 slot-mapping claims; alias-closure recall live; mock embeddings in CI).
 > The working agreement holds: vectors first, two witnesses in lockstep for anything
 > normative, checkpoint commits on main, artifacts read as designed-from-the-start.
 
@@ -337,6 +337,23 @@ what was known. docs/agents.html is the user-facing brief; this section is the b
   time scrubber. Docs page gains live widgets as pieces land.
 
 ### Chorus build log (newest first)
+
+- **Phase 2 — trust dynamics.** ✅ — (1) **ChorusAdjudicator**: a derived author (own keypair,
+  own track record) over a per-agent DerivationHost; agent writes/imports route through the
+  write-back loop once a host is attached; judges the surviving candidates of one attribute
+  per subject and emits one verdict belief per subject via KEYED EMISSION (key =
+  verdictAttribute context) — new testimony supersedes only that subject's prior verdict by
+  self-authored negation; verdicts carry by/from/under and pass verifyPureDerivation (tampered
+  forgeries fail). (2) **DECISION REPLAY first-class** (chorus/decisions.ts): `decide()` pins
+  (instant, policy as canonical-CBOR hex inline, basis = content address of the resolved
+  view) into one signed delta with a CONTEXTLESS subject pointer (references without filing —
+  recall views stay beliefs-only); `replayDecision()` re-resolves under the pinned policy at
+  the pinned instant, verifies the basis byte-for-byte, and reports `retractedSince` (visible
+  then, negated afterwards — the receipts mark both). Replay does not drift when the agent's
+  current policy changes. (3) **RETROACTIVE DISTRUST first-class**: `agent.distrust(author)`
+  is one signed chorus.trust claim + a byPred policy (non-distrusted candidates rank first);
+  corroborated beliefs stand, sole-source claims still surface (trust is a lens, not a delete
+  button), full history queryable. 5 new scripted tests; TS 226 green.
 
 - **Phase 1 — chorus-core.** ✅ — implementations/ts/chorus/ (vocab, policies, agent, store):
   `ChorusAgent` = keypair + reactor + policy + offered lens/admission (wraps the SPEC-6 Peer);

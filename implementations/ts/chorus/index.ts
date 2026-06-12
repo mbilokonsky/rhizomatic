@@ -8,6 +8,20 @@ export {
   type BeliefReceipt,
   type RecallOptions,
 } from "./agent.js";
+export {
+  ChorusAdjudicator,
+  type AdjudicatorOptions,
+  type Candidate,
+  type Judge,
+} from "./adjudicator.js";
+export {
+  decide,
+  replayDecision,
+  viewBasis,
+  type Decision,
+  type DecisionInput,
+  type Replay,
+} from "./decisions.js";
 export { latest, trustFirst, everything, disagreements } from "./policies.js";
 export { loadPack, restore, savePack } from "./store.js";
 export {

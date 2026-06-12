@@ -18,3 +18,17 @@ export const ROLE_SOURCE = `${CHORUS_PREFIX}.belief.source`;
 
 export const BELIEF_KINDS = ["observation", "fact", "preference", "task"] as const;
 export type BeliefKind = (typeof BELIEF_KINDS)[number];
+
+// A decision is one delta pinning exactly what was known when an agent acted: the instant it
+// resolved (asOf), the policy it held (canonical CBOR hex), and the content address of the
+// view it acted on (basis). Replay re-resolves and must reproduce the basis.
+export const ROLE_DECISION_ABOUT = `${CHORUS_PREFIX}.decision.about`;
+export const ROLE_DECISION_INTENT = `${CHORUS_PREFIX}.decision.intent`;
+export const ROLE_DECISION_ASOF = `${CHORUS_PREFIX}.decision.asOf`;
+export const ROLE_DECISION_BASIS = `${CHORUS_PREFIX}.decision.basis`;
+export const ROLE_DECISION_POLICY = `${CHORUS_PREFIX}.decision.policy`;
+
+// Trust edits are claims too: demoting an author is auditable data, never a quiet config flip.
+export const ROLE_TRUST_AUTHOR = `${CHORUS_PREFIX}.trust.author`;
+export const ROLE_TRUST_VERDICT = `${CHORUS_PREFIX}.trust.verdict`;
+export const ROLE_TRUST_REASON = `${CHORUS_PREFIX}.trust.reason`;

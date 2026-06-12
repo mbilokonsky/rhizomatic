@@ -8,6 +8,7 @@
 
 import {
   DeltaSet,
+  DerivationHost,
   Peer,
   evalTerm,
   makeNegationClaims,
@@ -15,6 +16,7 @@ import {
   parseTerm,
   signClaims,
   syncBoth,
+  type Claims,
   type Delta,
   type Pointer,
   type Pred,
@@ -28,6 +30,9 @@ import {
   ROLE_CONFIDENCE,
   ROLE_KIND,
   ROLE_SOURCE,
+  ROLE_TRUST_AUTHOR,
+  ROLE_TRUST_REASON,
+  ROLE_TRUST_VERDICT,
   ROLE_VALUE,
   type BeliefKind,
 } from "./vocab.js";
@@ -76,6 +81,8 @@ export class ChorusAgent {
   readonly author: string;
   policy: unknown;
   private readonly clock: () => number;
+  private host: DerivationHost | undefined;
+  private readonly distrusted = new Set<string>();
 
   constructor(opts: AgentOptions) {
     this.name = opts.name;
@@ -87,6 +94,37 @@ export class ChorusAgent {
     this.seedHex = opts.seedHex;
   }
   private readonly seedHex: string;
+
+  // The derivation host this agent's writes flow through, once anything reactive (an
+  // adjudicator, SPEC-7) is attached. Lazy: a plain agent pays nothing.
+  ensureHost(): DerivationHost {
+    this.host = this.host ?? new DerivationHost(this.peer.reactor);
+    return this.host;
+  }
+
+  // Sign as this agent and ingest through the write-back loop when a host is attached, so
+  // derived authors react to our own writes (SPEC-7 §6).
+  private ingestOwn(claims: Claims): Delta {
+    const signed = signClaims(claims, this.seedHex);
+    const result =
+      this.host === undefined ? this.peer.reactor.ingest(signed) : this.host.ingest(signed);
+    if (result.status === "rejected") throw new Error(`own claim rejected: ${result.reason}`);
+    return signed;
+  }
+
+  // The agent's clock — claimed time for anything it authors (SPEC-1 §6).
+  now(): number {
+    return this.clock();
+  }
+
+  // Author an arbitrary signed claim (the escape hatch the decision vocabulary uses).
+  record(input: { readonly timestamp: number; readonly pointers: readonly Pointer[] }): Delta {
+    return this.ingestOwn({
+      timestamp: input.timestamp,
+      author: this.author,
+      pointers: [...input.pointers],
+    });
+  }
 
   // --- writing -----------------------------------------------------------------------------------
 
@@ -118,16 +156,18 @@ export class ChorusAgent {
     if (b.source !== undefined) {
       pointers.push({ role: ROLE_SOURCE, target: { kind: "primitive", value: b.source } });
     }
-    return this.peer.authorClaims({ timestamp: b.timestamp ?? this.clock(), pointers });
+    return this.ingestOwn({
+      timestamp: b.timestamp ?? this.clock(),
+      author: this.author,
+      pointers,
+    });
   }
 
   // Retract a belief: a signed negation APPENDS — history stays intact (SPEC-1 §7).
   retract(deltaId: string, reason?: string, timestamp?: number): Delta {
-    const claims = makeNegationClaims(this.author, timestamp ?? this.clock(), deltaId, reason);
-    const signed = signClaims(claims, this.seedHex);
-    const result = this.peer.reactor.ingest(signed);
-    if (result.status === "rejected") throw new Error(`own retraction rejected: ${result.reason}`);
-    return signed;
+    return this.ingestOwn(
+      makeNegationClaims(this.author, timestamp ?? this.clock(), deltaId, reason),
+    );
   }
 
   // --- reading -----------------------------------------------------------------------------------
@@ -179,6 +219,49 @@ export class ChorusAgent {
     this.policy = policy;
   }
 
+  // RETROACTIVE DISTRUST, first-class: demote an author with one edit to this agent's OWN
+  // data. Every belief downstream of their testimony re-resolves instantly; everything
+  // corroborated elsewhere stands; their full claim history remains intact and queryable.
+  // The edit itself is a signed claim — trust changes are auditable, never quiet config.
+  distrust(author: string, reason?: string, timestamp?: number): Delta {
+    this.distrusted.add(author);
+    this.policy = this.distrustPolicy();
+    const pointers: Pointer[] = [
+      { role: ROLE_TRUST_AUTHOR, target: { kind: "primitive", value: author } },
+      { role: ROLE_TRUST_VERDICT, target: { kind: "primitive", value: "distrusted" } },
+    ];
+    if (reason !== undefined) {
+      pointers.push({ role: ROLE_TRUST_REASON, target: { kind: "primitive", value: reason } });
+    }
+    return this.ingestOwn({
+      timestamp: timestamp ?? this.clock(),
+      author: this.author,
+      pointers,
+    });
+  }
+
+  distrusts(author: string): boolean {
+    return this.distrusted.has(author);
+  }
+
+  // Claims from anyone NOT distrusted rank first; a distrusted author's claims survive (they
+  // are history, not garbage) but win only when nothing else speaks (SPEC-5 §3 byPred).
+  private distrustPolicy(): unknown {
+    const authors = [...this.distrusted].sort();
+    return {
+      default: {
+        pick: {
+          order: {
+            byPred: {
+              pred: { not: { match: { field: "author", cmp: "inSet", const: authors } } },
+              then: { byTimestamp: "desc" },
+            },
+          },
+        },
+      },
+    };
+  }
+
   // --- federation & persistence ------------------------------------------------------------------
 
   sync(other: ChorusAgent): void {
@@ -193,13 +276,14 @@ export class ChorusAgent {
     return this.peer.reactor.digest();
   }
 
-  // Ingest an external set (e.g. unpacked from disk). Returns how many were accepted.
+  // Ingest an external set (e.g. unpacked from disk, or another agent's testimony). Flows
+  // through the write-back loop when a host is attached, so derived authors react.
   importSet(set: DeltaSet): { accepted: number; duplicate: number; rejected: number } {
     let accepted = 0;
     let duplicate = 0;
     let rejected = 0;
     for (const d of set) {
-      const r = this.peer.reactor.ingest(d);
+      const r = this.host === undefined ? this.peer.reactor.ingest(d) : this.host.ingest(d);
       if (r.status === "accepted") accepted += 1;
       else if (r.status === "duplicate") duplicate += 1;
       else rejected += 1;

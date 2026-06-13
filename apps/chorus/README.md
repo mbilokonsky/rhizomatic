@@ -138,8 +138,11 @@ per-recipient claim: handled-ness has provenance; a broadcast acked by one recip
 visible to the rest; the sender's `retract` withdraws globally). Addressing targets
 **declared identity**: a session id, every session of a model, every session on a surface,
 any session scoped to a topic, or the human — whose inbox is the console, ack button
-included. Threads ride a `re` pointer; `about` references concerned entities without filing
-at them.
+included. **Author mail** closes the loop on the canonical gesture — one process notices
+something another process wrote: `to: {authorOf: <deltaId>}` addresses whoever _signed that_,
+the exact keypair, resolved at send time. Threads ride a `re` pointer; `about` references
+concerned entities without filing at them — on a `post` (what this concerns) and on an `ack`
+(what my response touched: a response is often an effect, not a reply).
 
 The substrate is append-only and that is load-bearing, so "ephemeral" means what it can
 honestly mean: **ephemeral salience over a permanent record**. The bytes stay; the attention

@@ -20,6 +20,7 @@ export const ROLE_MSG_TO_MODEL = `${CHORUS_PREFIX}.message.toModel`;
 export const ROLE_MSG_TO_SURFACE = `${CHORUS_PREFIX}.message.toSurface`;
 export const ROLE_MSG_TO_TOPIC = `${CHORUS_PREFIX}.message.toTopic`;
 export const ROLE_MSG_TO_USER = `${CHORUS_PREFIX}.message.toUser`;
+export const ROLE_MSG_TO_AUTHOR = `${CHORUS_PREFIX}.message.toAuthor`;
 export const ROLE_MSG_ABOUT = `${CHORUS_PREFIX}.message.about`;
 export const ROLE_MSG_RE = `${CHORUS_PREFIX}.message.re`;
 export const ROLE_MSG_ACK = `${CHORUS_PREFIX}.message.ack`;
@@ -31,6 +32,10 @@ export interface MessageAddress {
   readonly surface?: string; // every session on a surface (claude-code, claude-desktop, …)
   readonly topics?: readonly string[]; // any session scoped to one of these (":"-suffix = prefix family)
   readonly user?: boolean; // the human — their inbox is the console
+  // AUTHOR MAIL: one exact keypair. The canonical coordination gesture — "about this thing
+  // you wrote" — is anchored at a delta, and a delta's signature IS its author at a
+  // timestamp. The post tool resolves {authorOf: <deltaId>} to this key at send time.
+  readonly author?: string;
 }
 
 export interface PostInput {
@@ -68,6 +73,9 @@ export function messagePointers(p: PostInput): Pointer[] {
   if (to.user === true) {
     pointers.push({ role: ROLE_MSG_TO_USER, target: { kind: "primitive", value: true } });
   }
+  if (to.author !== undefined) {
+    pointers.push({ role: ROLE_MSG_TO_AUTHOR, target: { kind: "primitive", value: to.author } });
+  }
   for (const a of p.about ?? []) {
     pointers.push({ role: ROLE_MSG_ABOUT, target: { kind: "entity", entity: { id: a } } });
   }
@@ -79,12 +87,21 @@ export function messagePointers(p: PostInput): Pointer[] {
 
 // An ack is a per-recipient claim: "I have seen and handled this." A broadcast acked by one
 // recipient stays visible to the others; a global withdrawal is the sender's retract.
-export function ackPointers(messageId: string, note?: string): Pointer[] {
+// A response is often an EFFECT, not a reply — a commit, a clarifying belief, a retraction —
+// so an ack may carry `about` references to the responding artifacts (audit-only for now).
+export function ackPointers(
+  messageId: string,
+  note?: string,
+  about?: readonly string[],
+): Pointer[] {
   const pointers: Pointer[] = [
     { role: ROLE_MSG_ACK, target: { kind: "delta", deltaRef: { delta: messageId } } },
   ];
   if (note !== undefined) {
     pointers.push({ role: ROLE_MSG_ACK_NOTE, target: { kind: "primitive", value: note } });
+  }
+  for (const a of about ?? []) {
+    pointers.push({ role: ROLE_MSG_ABOUT, target: { kind: "entity", entity: { id: a } } });
   }
   return pointers;
 }
@@ -164,6 +181,7 @@ export function inbox(
       surface?: string;
       topics?: string[];
       user?: boolean;
+      author?: string;
     } = {};
     const about: string[] = [];
     for (const p of d.claims.pointers) {
@@ -185,6 +203,8 @@ export function inbox(
         if (t !== undefined) to.topics = [...(to.topics ?? []), t];
       } else if (p.role === ROLE_MSG_TO_USER && p.target.kind === "primitive") {
         to.user = p.target.value === true;
+      } else if (p.role === ROLE_MSG_TO_AUTHOR && p.target.kind === "primitive") {
+        to.author = String(p.target.value);
       } else if (p.role === ROLE_MSG_ABOUT && p.target.kind === "entity") {
         about.push(p.target.entity.id);
       } else if (p.role === ROLE_MSG_RE && p.target.kind === "delta") {
@@ -199,7 +219,8 @@ export function inbox(
       to.model === undefined &&
       to.surface === undefined &&
       to.topics === undefined &&
-      to.user === undefined
+      to.user === undefined &&
+      to.author === undefined
         ? true // broadcast
         : (to.session !== undefined && to.session === recipient.sessionId) ||
           (to.model !== undefined && to.model === recipient.model) ||
@@ -208,7 +229,8 @@ export function inbox(
             (recipient.topics ?? []).some((mine) =>
               to.topics!.some((theirs) => topicMatches(mine, theirs)),
             )) ||
-          (to.user === true && recipient.user === true);
+          (to.user === true && recipient.user === true) ||
+          (to.author !== undefined && to.author === recipient.author);
     if (!addressed) continue;
 
     const acked = ackedByMe.has(d.id);

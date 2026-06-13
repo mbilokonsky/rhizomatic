@@ -360,6 +360,18 @@ distrust). Slices, each usable + committed: A identity ✅ · B shared store · 
 D briefing/MX · E real-client handshake · F beyond-parity affordances.
 chorus/README.md is the product doc and grows with each slice.
 
+- **Slice N — author mail + disposition artifacts.** ✅ — the two resolved refinements from
+  the messaging design review, nothing more. (1) `to: {authorOf: <deltaId>}`: the canonical
+  coordination gesture — one process notices something another process WROTE — is anchored
+  at a delta, and a delta's signature is its author at a timestamp; the post tool resolves
+  authorOf to that exact keypair at send time (chorus.message.toAuthor), failing loudly on
+  unknown deltas. Author mail reaches only that keypair — not same-model bystanders.
+  (2) `ack` gains `about` entity references: a response is often an EFFECT (a commit, a
+  clarifying belief, a retraction), so the disposition can point at its artifacts —
+  audit-only for now, no reader. Deliberately NOT built (recorded here so nobody re-derives
+  them prematurely): read watermarks (one claim clears N messages — the fix if briefing
+  inboxes ever fill with stale broadcasts) and message TTLs. Suite 277 (66 chorus).
+
 - **Slice M — messages: ephemeral salience, permanent record.** ✅ — dogfooding surfaced
   cross-session correspondence immediately (chat leaves a question, code ships a ruling
   back), riding the knowledge graph as task beliefs on proj:chorus — addressing in prose, no

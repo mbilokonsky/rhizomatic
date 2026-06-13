@@ -127,6 +127,73 @@ describe("chorus messages: post → inbox → ack", () => {
     expect(briefed.contested).toEqual([]);
   });
 
+  it("author mail: authorOf addresses whoever signed a delta — the exact keypair", () => {
+    // The canonical gesture: one process notices something another process wrote.
+    const writer = mk("writer", 1000);
+    callTool(writer, "begin-session", { model: "claude-fable-5" });
+    const claim = callTool(writer, "remember", {
+      about: "svc:api",
+      attribute: "owner",
+      value: "team-a",
+    }) as { deltaId: string };
+
+    const noticer = mk("noticer", 5000);
+    callTool(noticer, "begin-session", { model: "claude-fable-5" });
+    share(writer, noticer);
+    callTool(noticer, "post", {
+      body: "is owner=team-a still true?",
+      to: { authorOf: claim.deltaId },
+      about: ["svc:api"],
+    });
+
+    const bystander = mk("bystander", 9000);
+    callTool(bystander, "begin-session", { model: "claude-fable-5" });
+    share(noticer, writer);
+    share(noticer, bystander);
+    // Only the claim's author receives it — not a same-model bystander.
+    expect((callTool(writer, "inbox", {}) as MessageView[]).map((m) => m.body)).toContain(
+      "is owner=team-a still true?",
+    );
+    expect((callTool(bystander, "inbox", {}) as MessageView[]).map((m) => m.body)).not.toContain(
+      "is owner=team-a still true?",
+    );
+    // Addressing an unknown delta fails loudly.
+    expect(() => callTool(noticer, "post", { body: "?", to: { authorOf: "ffff" } })).toThrow(
+      /unknown delta/,
+    );
+  });
+
+  it("an ack can point at its disposition's artifacts", () => {
+    const sender = mk("sender", 1000);
+    callTool(sender, "begin-session", { model: "claude-fable-5" });
+    const posted = callTool(sender, "post", { body: "please clarify proj:x status" }) as {
+      messageId: string;
+    };
+    const handler = mk("handler", 5000);
+    callTool(handler, "begin-session", { model: "claude-fable-5" });
+    share(sender, handler);
+    // The response is an EFFECT (a clarifying belief), the ack points at it.
+    callTool(handler, "remember", {
+      about: "proj:x",
+      attribute: "status",
+      value: "green, as of Q3",
+    });
+    const a = callTool(handler, "ack", {
+      messageId: posted.messageId,
+      note: "clarified in the knowledge graph",
+      about: ["proj:x"],
+    }) as { ackId: string };
+    const ackDelta = handler.agent.peer.reactor.get(a.ackId)!;
+    const refs = ackDelta.claims.pointers
+      .filter((p) => p.role === "chorus.message.about" && p.target.kind === "entity")
+      .map((p) => (p.target.kind === "entity" ? p.target.entity.id : ""));
+    expect(refs).toEqual(["proj:x"]);
+    // And the artifact reference does not file at the entity.
+    expect(callTool(handler, "recall", { entity: "proj:x" })).toEqual({
+      status: "green, as of Q3",
+    });
+  });
+
   it("the human's mail: toUser lands in the console's inbox, signed acks clear it", () => {
     const sender = mk("sender", 1000);
     callTool(sender, "begin-session", { model: "claude-fable-5" });

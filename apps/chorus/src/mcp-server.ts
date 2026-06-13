@@ -265,6 +265,11 @@ const TOOLS = [
               description: "any session scoped to one of these (':' suffix = prefix family)",
             },
             user: { type: "boolean", description: "the human — delivered to the console" },
+            authorOf: {
+              type: "string",
+              description:
+                "a delta id — address whoever SIGNED it (the canonical 'about this thing you wrote' gesture; resolves to that exact keypair at send time)",
+            },
           },
           additionalProperties: false,
         },
@@ -291,12 +296,17 @@ const TOOLS = [
   {
     name: "ack",
     description:
-      "Acknowledge a message: it leaves YOUR inbox (other recipients of a broadcast still see it). The ack is a signed claim — handled-ness has provenance. To withdraw a message globally, retract it.",
+      "Acknowledge a message: it leaves YOUR inbox (other recipients of a broadcast still see it). The ack is a signed claim — handled-ness has provenance. A response is often an EFFECT, not a reply: point `about` at the entities your response touched, and say what you did in `note`. To withdraw a message globally, retract it.",
     inputSchema: {
       type: "object",
       properties: {
         messageId: { type: "string" },
         note: { type: "string", description: "optional: what you did about it" },
+        about: {
+          type: "array",
+          items: { type: "string" },
+          description: "entity ids your response touched (the disposition's artifacts)",
+        },
         ...SPEAKER,
       },
       required: ["messageId"],
@@ -773,12 +783,20 @@ export function callTool(
       const topics = Array.isArray(rawTo?.["topics"])
         ? rawTo["topics"].filter((t): t is string => typeof t === "string")
         : undefined;
+      const authorOf = str(rawTo?.["authorOf"]);
+      let author: string | undefined;
+      if (authorOf !== undefined) {
+        const target = agent.peer.reactor.get(authorOf);
+        if (target === undefined) throw new Error(`post: authorOf names unknown delta ${authorOf}`);
+        author = target.claims.author;
+      }
       const to: MessageAddress = {
         ...(str(rawTo?.["session"]) === undefined ? {} : { session: str(rawTo!["session"])! }),
         ...(str(rawTo?.["model"]) === undefined ? {} : { model: str(rawTo!["model"])! }),
         ...(str(rawTo?.["surface"]) === undefined ? {} : { surface: str(rawTo!["surface"])! }),
         ...(topics === undefined ? {} : { topics }),
         ...(rawTo?.["user"] === true ? { user: true } : {}),
+        ...(author === undefined ? {} : { author }),
       };
       const about = Array.isArray(args["about"])
         ? args["about"].filter((a): a is string => typeof a === "string")
@@ -815,7 +833,10 @@ export function callTool(
       if (agent.peer.reactor.get(messageId) === undefined) {
         throw new Error(`ack: unknown message ${messageId}`);
       }
-      const pointers = ackPointers(messageId, str(args["note"]));
+      const ackAbout = Array.isArray(args["about"])
+        ? args["about"].filter((a): a is string => typeof a === "string")
+        : undefined;
+      const pointers = ackPointers(messageId, str(args["note"]), ackAbout);
       const input = { timestamp: ctx.clock(), pointers };
       const delta = asUser ? agent.recordAs(ctx.userSeedHex, input) : agent.record(input);
       persist?.();

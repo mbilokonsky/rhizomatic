@@ -30,6 +30,7 @@ export {
   type SessionSummary,
 } from "./briefing.js";
 export { startConsole, type ConsoleHandle, type ConsoleOptions } from "./console.js";
+export { startHttpServer, type HttpServerHandle, type HttpServerOptions } from "./mcp-http.js";
 export { declareConcept, slotId } from "./concepts.js";
 export {
   recallUnified,

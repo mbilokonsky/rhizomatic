@@ -894,7 +894,9 @@ export function handleRequest(
   switch (req.method) {
     case "initialize":
       return reply({
-        protocolVersion: "2024-11-05",
+        // Echo the client's protocol version when it names one (streamable-HTTP clients
+        // negotiate 2025-03-26+); fall back to the stdio baseline otherwise.
+        protocolVersion: str(req.params?.["protocolVersion"]) ?? "2024-11-05",
         capabilities: { tools: {} },
         serverInfo: { name: "chorus", version: "0.1.0" },
       });

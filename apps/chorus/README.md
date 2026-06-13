@@ -6,7 +6,8 @@ handle, trust dynamics, the librarian, the demo, and the MCP server.
 
 ```
 npm run chorus:demo     # the whole thesis, one deterministic receipt-printing story
-npm run chorus:mcp      # the MCP server over stdio
+npm run chorus:mcp      # the MCP server over stdio (local clients)
+npm run chorus:http     # the same server over streamable HTTP (remote surfaces, :4821)
 npm run chorus:console  # the human's web console over the same store (default :4820)
 ```
 
@@ -199,6 +200,34 @@ Then teach the model the protocol — drop this in your `CLAUDE.md`:
   `remember`.
 - Before ending: `end-session` {summary: what happened + what's still open}.
 ```
+
+## Running it remotely (one node, every surface)
+
+The protocol brain is transport-agnostic; `chorus:http` serves it over **streamable HTTP**
+so every Claude surface can share one store on one always-on machine. One `Mcp-Session-Id`
+= one chorus session = one author — a surface connecting twice is two keypairs, exactly
+like two local processes.
+
+```bash
+# On the host (generate the token once, keep it private like the seed):
+CHORUS_HTTP_TOKEN=<48 hex chars> CHORUS_MASTER_SEED=... CHORUS_STORE=~/.chorus/memory.jsonl \
+  npm run chorus:http     # binds 127.0.0.1:4821 — TLS terminates in front
+
+# Reach it from your other machines (tailnet only):
+tailscale serve --bg --set-path /mcp https://+:443 http://127.0.0.1:4821/mcp
+claude mcp add chorus --transport http https://<host>.<tailnet>.ts.net/mcp/<token>
+
+# Reach it from claude.ai web (requires PUBLIC reachability — Claude connects from
+# Anthropic's servers, not your browser):
+tailscale funnel --bg 4821
+# then add a custom connector: https://<host>.<tailnet>.ts.net/mcp/<token>
+```
+
+Auth, v0: the token is a secret URL path segment, because claude.ai's connector UI offers
+OAuth-or-nothing and cannot send custom headers; clients that can send headers may use
+`Authorization: Bearer <token>` against `/mcp` instead. Treat the URL as a credential.
+Real OAuth (with dynamic client registration) is the planned upgrade if the node ever
+serves anyone but its keyholder. Unknown paths 404 without a body.
 
 ## MX: parity with native memory, and past it
 

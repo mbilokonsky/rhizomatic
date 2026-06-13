@@ -360,6 +360,22 @@ distrust). Slices, each usable + committed: A identity ✅ · B shared store · 
 D briefing/MX · E real-client handshake · F beyond-parity affordances.
 chorus/README.md is the product doc and grows with each slice.
 
+- **Slice P — the remote node (streamable HTTP transport).** ✅ — chorus:http serves the
+  SAME transport-agnostic protocol brain (handleRequest) over streamable HTTP: POST JSON-RPC
+  at /mcp/<token>; initialize mints an Mcp-Session-Id; ONE MCP SESSION = ONE CHORUS SESSION
+  = ONE AUTHOR (a surface connecting twice is two keypairs, like two local processes);
+  notifications → 202; DELETE ends a session; HEAD discovery; GET 405 (no server push);
+  initialize echoes the client's protocolVersion. Auth v0 = secret URL path segment
+  (claude.ai's connector UI is OAuth-or-nothing, no custom headers — verified against the
+  help center; clients with headers may use Bearer against /mcp); unknown paths 404 bodyless;
+  binds 127.0.0.1 with TLS in front (tailscale serve for tailnet machines, funnel for
+  claude.ai's public-reachability requirement — Claude connects from Anthropic's servers).
+  FOUND EN ROUTE: SharedStore's on-disk watermark assumes one agent per instance — sharing
+  one store object across HTTP sessions made refresh skip siblings' deltas; now one
+  SharedStore per session (the test that caught it stays). Idle sessions prune at 2h.
+  OAuth/DCR is the planned upgrade if the node ever serves anyone but its keyholder.
+  Suite 281 (70 chorus).
+
 - **Slice O — plurality declarations: divergence-as-union.** ✅ — the second sitting's field
   finding, delivered by the human (its channel post was lost to a hang — see the open bug
   below): the contested detector read multi-author accretion on composed-of as conflict, but

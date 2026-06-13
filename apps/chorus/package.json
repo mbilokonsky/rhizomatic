@@ -8,6 +8,7 @@
   "scripts": {
     "chorus:demo": "tsx src/demo.ts",
     "chorus:mcp": "tsx src/mcp-server.ts",
+    "chorus:http": "tsx src/mcp-http.ts",
     "chorus:console": "tsx src/console.ts",
     "demo": "npm run chorus:demo",
     "test": "vitest run",

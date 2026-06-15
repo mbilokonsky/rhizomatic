@@ -114,9 +114,11 @@ top of those mechanics: a briefing that surfaces what the record *disagrees abou
 silently keeping the last write, decisions replayable byte-for-byte against exactly what was
 known, retroactive distrust of an author / a session / an entire model in one signed edit, a
 librarian that converges vocabularies through negatable judgment claims, an MCP server
-(sixteen tools — drop-in memory for any agent framework), and a local web console with live
-receipts and an as-of time scrubber. See the [Chorus README](apps/chorus/README.md) for the
-`claude mcp add` wiring and the model-side protocol.
+(twenty-five tools — drop-in memory for any agent framework, including **GraphQL on demand**:
+a schema synthesized from a pinned snapshot, so the memory graph is queryable and traversable
+without a maintained schema), and a local web console with live receipts and an as-of time
+scrubber. See the [Chorus README](apps/chorus/README.md) for the `claude mcp add` wiring and
+the model-side protocol.
 
 ## Status
 
@@ -125,7 +127,7 @@ Specification draft **with two working witnesses and one working application**: 
 vectors at every layer — canonical CBOR, content addressing, Ed25519 signatures, the
 eight-operator algebra (including parameterized terms and the SPEC-9 alias closure), resolution
 policies, the schemas-as-deltas bootstrap, the incremental reactor, packs, federation, and
-derivation — plus Chorus (49 tests) consuming the TypeScript witness as an ordinary dependency.
+derivation — plus Chorus (78 tests) consuming the TypeScript witness as an ordinary dependency.
 The interactive tour at the docs site runs the committed vectors through BOTH witnesses in your
 browser (the Rust one as WebAssembly): 149/149. Cross-implementation HTTP federation is proven
 (a Rust peer converging with a live TypeScript server to identical canonical digests). Gaps and

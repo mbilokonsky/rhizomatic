@@ -1,5 +1,27 @@
 # Progress
 
+> **RESUME HERE (2026-06-15). GraphQL-on-demand SHIPPED (Slice Q, merged to main via PR #1);
+> the next unit is the PLUGGABLE PERSISTENCE TIER.**
+> Since the Chorus arc closed: Chorus now exposes **GraphQL on demand** — `gql-prepare` pins a
+> snapshot of the store and synthesizes a GraphQL schema for that frozen `(snapshot, policy)`
+> pair on demand (types from id-prefixes, reference edges typed by target, `plurality:set` →
+> list fields, role-discriminated `backlinks` reverse traversal), queryable until released or
+> regenerated. Five MCP tools (`gql-prepare/query/schema/release/list`), `apps/chorus/src/gql.ts`,
+> 78 chorus tests, verified live over the tailscale HTTP node by a claude.ai web session. The
+> remote node runs via `~/.chorus/start-chorus-node.cmd` (manual restart for now; hardening
+> deferred). An external party had its own agent build a Chorus adapter
+> — the first outside implementer, which makes **federation** a near-term, real-demand direction.
+>
+> **The next unit to `/loop` is the pluggable persistence tier** — see
+> [apps/chorus/PERSISTENCE.md](apps/chorus/PERSISTENCE.md) (the self-contained work order with
+> intentions, plan, and Definition of Done) and the kickoff block in the "Next unit" section
+> below. The north star it builds toward — federation as publish/subscribe over arbitrary
+> queries, with privacy as a default-deny property of what queries you publish — is recorded in
+> [spec/11-federation-as-query.NOTE.md](spec/11-federation-as-query.NOTE.md). Persistence is the
+> foundation; federation is the unit after it.
+>
+> ---
+>
 > **RESUME HERE (2026-06-12). THE CHORUS ARC IS COMPLETE — its Definition of Done holds.**
 > The substrate (M0-M5, both witnesses, byte parity) AND the product are shipped: SPEC-9
 > (aliases/concepts/slots) vectored in both witnesses (tour runs 149/149 in-browser);
@@ -360,6 +382,28 @@ distrust). Slices, each usable + committed: A identity ✅ · B shared store · 
 D briefing/MX · E real-client handshake · F beyond-parity affordances.
 chorus/README.md is the product doc and grows with each slice.
 
+- **Slice Q — GraphQL on demand (schema synthesized from a pinned snapshot).** ✅ (merged to
+  main via PR #1, 2026-06-15) — the reconciliation of GraphQL's static schema with Chorus's
+  open, dynamic vocabulary, by refusing to keep a schema at all. `gql-prepare` pins a snapshot
+  and reflects over its surviving deltas to SYNTHESIZE a GraphQL schema for that frozen
+  `(snapshot, policy)` pair — entity-types from id-prefixes, reference edges typed by their
+  target (read from the value pointer's KIND, never a substring), `plurality:set` declarations
+  as list fields (cardinality-as-policy: scalar fields resolve under the pinned pick-policy,
+  list fields under a union policy), primitive kinds narrowed from observation. The schema is
+  ephemeral (a pure function of what was pinned) and the snapshot frozen, so a long retrospective
+  walk reads one consistent world while the live store moves on — the OLTP/OLAP split the gql
+  design conversation landed on, with `prepare`+`query` the frozen/retrospective mode. Every
+  resolver is an operation over the pin: a field is a `recall` over the frozen set; reverse
+  adjacency (`backlinks`, role-discriminated, no substring scan) is the inbound index surfaced,
+  first-class on every node and at the root. Five MCP tools (`gql-prepare/query/schema/release/
+  list`), `apps/chorus/src/gql.ts`, `graphql@16`. App-layer (no vectors / two-witness needed —
+  TS-only per CLAUDE.md). 78 chorus tests; the CI fix in the same PR (install the core's deps in
+  the chorus job before its typecheck) un-broke main's long-red chorus gate. **Deliberately NOT
+  built (the derivation-layer milestone, recorded so nobody re-derives it):** aggregates/argmax
+  ("the LAST time…") and path-mediated filtering ("works ABOUT X") — `backlinks` returns
+  timestamp-desc so single-hop "last" falls out, but group-by/argmax-across-a-join is the next
+  query slice. Verified live over the tailscale HTTP node by a claude.ai web session.
+
 - **Slice P — the remote node (streamable HTTP transport).** ✅ — chorus:http serves the
   SAME transport-agnostic protocol brain (handleRequest) over streamable HTTP: POST JSON-RPC
   at /mcp/<token>; initialize mints an Mcp-Session-Id; ONE MCP SESSION = ONE CHORUS SESSION
@@ -685,6 +729,47 @@ console + federation story. One argument, not three demos.
 
 ```
 /loop Build the Chorus arc per PROGRESS.md (read RESUME HERE + "The Chorus arc" + docs/agents.html first). Start at Phase 0 (spec/09-alias.PROPOSAL.md) and proceed phase by phase — vectors first, both witnesses for anything normative (the aliased closure is L2), checkpoint commits on main, green gates before every commit — until the Definition of Done holds and the demo runs end-to-end. Keep docs/agents.html honest as pieces land.
+```
+
+## Next unit — pluggable persistence tier (READY TO `/loop`)
+
+**The work order with full intentions, plan, and Definition of Done is
+[apps/chorus/PERSISTENCE.md](apps/chorus/PERSISTENCE.md).** Read that first.
+
+**Why now.** The single JSONL-file store (`apps/chorus/src/shared-store.ts`) is the v0
+persistence tier — and it's the weak point: the [`field-bug:post-hang`] forensics (lock
+contention + a compact-at-boot rename racing a Windows read handle, a lost write) is the file-lock
+model failing under concurrency that federation will only multiply. We do not throw the JSONL away
+— it's the legible dev/audit tier forever. We extract a **`Store` interface** (the seam) and add
+a second conforming backend (**SQLite**) that solves the concurrency + indexed-read problems the
+file can't. Different tiers, different problems; the interface is the asset, exactly as the repo
+treats the format itself (a contract with multiple witnesses).
+
+**The through-line** (see [spec/11-federation-as-query.NOTE.md](spec/11-federation-as-query.NOTE.md)):
+a grow-only signed delta log makes persistence and federation the *same* shape — durable append,
+content-addressed dedup, "deltas since watermark." The `Store` interface IS the federation-sync
+interface. Design `since(watermark)` now; leave the seam for the closure-scoped
+`since(watermark, closure)` federation will want, but don't build federation in this unit.
+
+**Definition of done** (the `/loop` runs until ALL hold; full detail in the work order):
+1. A `Store` interface extracted; `shared-store.ts` becomes the **JSONL backend** implementing it,
+   with NO behavior change (its existing tests stay green, unmodified in intent).
+2. A **SQLite backend** (`better-sqlite3`) implementing the same interface, passing the SAME
+   shared conformance test as the JSONL backend (convergence, idempotent append, torn-write
+   resilience, `since`-watermark reads).
+3. Backend selectable by env (`CHORUS_STORE_BACKEND=jsonl|sqlite`, default `jsonl`); a one-shot
+   **migration** path imports an existing `memory.jsonl` into a fresh SQLite store losslessly
+   (same digest after import).
+4. The SQLite backend serves an **indexed** `deltasByTarget` / `deltasByValue` read (back the
+   `recall` / `backlinks` / `gql-prepare` paths that today scan), proven faster than scan on a
+   seeded large store, with a test asserting identical results to the scan.
+5. `npm run check` green (format + lint + typecheck + 78+ tests); the MCP server boots on either
+   backend and a smoke test drives `remember → recall` through each.
+
+**Kickoff — paste this into a fresh session:**
+
+```
+/loop Build the pluggable persistence tier per apps/chorus/PERSISTENCE.md (read it, plus PROGRESS.md "Next unit" and spec/11-federation-as-query.NOTE.md, first). Extract a Store interface from shared-store.ts, keep JSONL as one backend, add a SQLite backend passing the same conformance test, env-select + lossless migration, indexed reads for the recall/backlinks/gql paths. App-layer: TS-only, no vectors/two-witness, checkpoint commits on main behind a feature branch + PR, green gates before every commit. Run until the Definition of Done in PERSISTENCE.md holds.
 ```
 
 ## Queued next (in value order)
